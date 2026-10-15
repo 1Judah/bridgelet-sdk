@@ -102,7 +102,15 @@ export class PaymentMonitorProvider implements OnModuleDestroy {
           void this.handlePaymentEvent(
             account,
             record as StellarSdk.Horizon.ServerApi.PaymentOperationRecord,
-          );
+          ).catch((err: unknown) => {
+            // handlePaymentEvent covers recordPayment() errors itself, but
+            // asset resolution and the DB status writes can still reject.
+            // Without this .catch those become unhandled promise rejections.
+            const errMsg = err instanceof Error ? err.message : String(err);
+            this.logger.error(
+              `Unhandled payment-event error for account ${account.id}: ${errMsg}`,
+            );
+          });
         },
         onerror: (err) => {
           const errMsg =
@@ -182,9 +190,21 @@ export class PaymentMonitorProvider implements OnModuleDestroy {
         `${record.amount} ${record.asset_code ?? 'XLM'} from ${record.from}`,
     );
 
-    const contractId = this.configService.getOrThrow<string>(
-      'stellar.ephemeralContractId',
-    );
+    // #812: record the payment on the EphemeralAccount instance recorded on
+    // the account row. Accounts created since #811 each get their own
+    // instance, so the shared `stellar.contracts.ephemeralAccount` config ID
+    // must not be used here. This also removes a read of
+    // `stellar.ephemeralContractId`, which is not a real config key (it is in
+    // neither env-validation nor .env.example) and made every streamed
+    // payment throw at this getOrThrow. Mirrors
+    // PaymentMonitorService.processPayment().
+    if (!account.contractId) {
+      throw new Error(
+        `Cannot record payment for account ${account.id}: no ` +
+          'EphemeralAccount contract ID is recorded for it.',
+      );
+    }
+    const contractId = account.contractId;
     const signerSecret = this.configService.getOrThrow<string>(
       'stellar.fundingSecret',
     );
