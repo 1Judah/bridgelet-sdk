@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectDataSource } from '@nestjs/typeorm';
+import type { DataSource } from 'typeorm';
 import { ValidationProvider } from './providers/validation.provider.js';
 import { ContractProvider } from './providers/contract.provider.js';
 import { TransactionProvider } from './providers/transaction.provider.js';
@@ -14,6 +16,28 @@ import {
   isSorobanContractFailure,
   throwSweepContractError,
 } from '../../common/errors/contract-error.mapper.js';
+import {
+  advisoryLockKey,
+  withAdvisoryLock,
+} from '../../common/locks/advisory-lock.util.js';
+
+/** Advisory-lock namespace for the SweepController nonce (#826). */
+const SWEEP_CONTROLLER_LOCK_NAMESPACE = 'sweep-controller-nonce';
+
+/**
+ * Recognises the SweepController's `InvalidNonce` rejection (#826).
+ *
+ * The contract defines `Error::InvalidNonce = 11` (bridgelet-core
+ * `contracts/sweep_controller/src/errors.rs`), so the host surfaces it as
+ * `Error(Contract, #11)` (optionally wrapped in a `HostError`/`simulation
+ * failed` message) or, when a client maps it, `InvalidNonce`. This must be
+ * checked *before* {@link isSorobanContractFailure}, which also matches any
+ * `Error(Contract, ...)`: a stale nonce is a race we retry, not a terminal
+ * failure.
+ */
+function isSweepNonceError(raw: string): boolean {
+  return raw.includes('InvalidNonce') || /Error\(Contract,\s*#11\)/.test(raw);
+}
 
 @Injectable()
 export class SweepsService {
@@ -30,6 +54,8 @@ export class SweepsService {
     @InjectMetric('sweep_failure_total')
     private readonly sweepFailureCounter: Counter<string>,
     private readonly sweepMetrics: SweepMetricsProvider,
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
   ) {}
 
   /**
@@ -96,62 +122,29 @@ export class SweepsService {
       }
       const ephemeralAccountContractId = sweepExecutionRequest.contractId;
 
-      // #812: the SweepController's nonce is a single global counter that is
-      // incremented after every successful sweep, so it has to be read from
-      // the contract and signed explicitly. Signing a stale value (it used to
-      // default to 0n) makes every sweep after the first one ever executed by
-      // a controller fail signature verification on-chain.
       const sweepControllerContractId = this.configService.getOrThrow<string>(
         'stellar.contracts.sweepController',
       );
-      const nonce = await this.stellarService.getSweepNonce(
-        sweepControllerContractId,
-      );
 
-      // Step 2: Generate authorization signature for the contract call.
-      // #823: async — the signer may be a remote KMS key.
-      const authSignature = await this.contractProvider.generateAuthSignature({
-        ephemeralPublicKey: sweepExecutionRequest.ephemeralPublicKey,
-        destinationAddress: sweepExecutionRequest.destinationAddress,
-        contractId: ephemeralAccountContractId,
-        nonce,
-      });
-
-      // Step 3: Submit execute_sweep() on the SweepController Soroban contract
-      try {
-        await this.stellarService.executeSweep({
+      // #826: the SweepController nonce is one global counter, so read-nonce →
+      // sign → submit has to be serialized across every app instance or two
+      // concurrent claims can read the same value and one reverts on-chain.
+      // A Postgres transaction-scoped advisory lock keyed on the controller ID
+      // does that without a new dependency, and releases on success or failure.
+      // The Horizon payout (Step 4) stays outside the lock.
+      await withAdvisoryLock(
+        this.dataSource,
+        advisoryLockKey(
+          SWEEP_CONTROLLER_LOCK_NAMESPACE,
           sweepControllerContractId,
-          ephemeralAccountContractId,
-          destination: sweepExecutionRequest.destinationAddress,
-          authSignature,
-          signerSecret: sweepExecutionRequest.ephemeralSecret,
-        });
-      } catch (error) {
-        // A Soroban contract failure (for example the host rejecting the
-        // invocation with `Error(Auth, InvalidAction)` during simulation) is
-        // deterministic: the contract rejects every retry, so surfacing it as
-        // a generic 500 only makes the claim page retry uselessly (and trip
-        // the throttle). Map it to a distinct, stable 502
-        // (SWEEP_CONTRACT_FAILED) with a safe message, and keep the raw host
-        // error in the server logs only.
-        //
-        // The heuristic matches host/contract markers in the raw error. A
-        // submit rejection whose serialized errorResult carries one of those
-        // markers is also an on-chain contract failure; a pure sequence/fee/
-        // ledger-level refusal (e.g. tx_bad_seq) carries none and stays
-        // retryable below.
-        const raw = error instanceof Error ? error.message : String(error);
-        if (isSorobanContractFailure(raw)) {
-          this.logger.error(
-            `Soroban contract failure authorizing sweep for account ` +
-              `${sweepExecutionRequest.accountId}: ${raw}`,
-            error instanceof Error ? error.stack : undefined,
-          );
-          throwSweepContractError();
-        }
-        // Transient RPC/network errors are retryable; let them propagate as-is.
-        throw error;
-      }
+        ),
+        () =>
+          this.authorizeSweepOnChain({
+            sweepControllerContractId,
+            ephemeralAccountContractId,
+            request: sweepExecutionRequest,
+          }),
+      );
 
       this.logger.log(
         `Contract sweep authorized for account ${sweepExecutionRequest.accountId}`,
@@ -218,6 +211,88 @@ export class SweepsService {
       destination: sweepExecutionRequest.destinationAddress,
       timestamp: transactionResult.timestamp,
     };
+  }
+
+  /**
+   * #826: read the SweepController nonce, sign and submit `execute_sweep`,
+   * retrying once with a freshly read nonce if the contract rejects the
+   * signature as stale (`InvalidNonce`). The caller holds the controller's
+   * advisory lock for the whole call, so the retry races nothing.
+   *
+   * #812: the nonce is a single global counter incremented after every
+   * successful sweep, so it must be read from the contract and signed
+   * explicitly; signing a stale value (it used to default to 0n) makes every
+   * sweep after the first ever executed by a controller fail on-chain.
+   */
+  private async authorizeSweepOnChain(params: {
+    sweepControllerContractId: string;
+    ephemeralAccountContractId: string;
+    request: SweepExecutionRequest;
+  }): Promise<void> {
+    const { sweepControllerContractId, ephemeralAccountContractId, request } =
+      params;
+
+    const maxAttempts = 2;
+    for (let attempt = 1; ; attempt++) {
+      // Step 2: read the live nonce and sign it.
+      const nonce = await this.stellarService.getSweepNonce(
+        sweepControllerContractId,
+      );
+      const authSignature = await this.contractProvider.generateAuthSignature({
+        ephemeralPublicKey: request.ephemeralPublicKey,
+        destinationAddress: request.destinationAddress,
+        contractId: ephemeralAccountContractId,
+        nonce,
+      });
+
+      // Step 3: submit execute_sweep() on the SweepController Soroban contract
+      try {
+        await this.stellarService.executeSweep({
+          sweepControllerContractId,
+          ephemeralAccountContractId,
+          destination: request.destinationAddress,
+          authSignature,
+          signerSecret: request.ephemeralSecret,
+        });
+        return;
+      } catch (error) {
+        const raw = error instanceof Error ? error.message : String(error);
+        // Second safety net: a stale-nonce rejection means another instance
+        // advanced the counter between our read and submit. Re-read and retry
+        // once. Checked before isSorobanContractFailure(), which also matches
+        // Error(Contract, ...) and would otherwise map this to a terminal 502.
+        if (attempt < maxAttempts && isSweepNonceError(raw)) {
+          this.logger.warn(
+            `Sweep nonce rejected for account ${request.accountId} ` +
+              '(InvalidNonce); retrying once with a freshly read nonce.',
+          );
+          continue;
+        }
+        // A Soroban contract failure (for example the host rejecting the
+        // invocation with `Error(Auth, InvalidAction)` during simulation) is
+        // deterministic: the contract rejects every retry, so surfacing it as
+        // a generic 500 only makes the claim page retry uselessly (and trip
+        // the throttle). Map it to a distinct, stable 502
+        // (SWEEP_CONTRACT_FAILED) with a safe message, and keep the raw host
+        // error in the server logs only.
+        //
+        // The heuristic matches host/contract markers in the raw error. A
+        // submit rejection whose serialized errorResult carries one of those
+        // markers is also an on-chain contract failure; a pure sequence/fee/
+        // ledger-level refusal (e.g. tx_bad_seq) carries none and stays
+        // retryable below.
+        if (isSorobanContractFailure(raw)) {
+          this.logger.error(
+            `Soroban contract failure authorizing sweep for account ` +
+              `${request.accountId}: ${raw}`,
+            error instanceof Error ? error.stack : undefined,
+          );
+          throwSweepContractError();
+        }
+        // Transient RPC/network errors are retryable; let them propagate as-is.
+        throw error;
+      }
+    }
   }
 
   /**

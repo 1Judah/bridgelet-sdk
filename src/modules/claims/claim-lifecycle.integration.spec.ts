@@ -110,8 +110,10 @@ describe('Claim redemption lifecycle (integration) [issue #820]', () => {
   };
 
   /**
-   * A mock EntityManager sufficient for both transactions redeemClaim opens:
+   * A mock EntityManager sufficient for every transaction the claim flow
+   * opens:
    *  - the claim-slot lock (SELECT ... FOR UPDATE) returns the account row;
+   *  - the sweep lock (#826) issues advisory-lock SQL via `query`;
    *  - the finalise transaction persists the account and the claim.
    */
   function makeManager() {
@@ -127,6 +129,10 @@ describe('Claim redemption lifecycle (integration) [issue #820]', () => {
       create: jest
         .fn()
         .mockImplementation((_entity: unknown, data: object) => ({ ...data })),
+      // #826: SweepsService runs read-nonce → sign → submit inside a
+      // transaction-scoped advisory lock, which issues raw SQL via the
+      // transaction manager before the contract call.
+      query: jest.fn().mockResolvedValue(undefined),
       qb,
     };
   }
@@ -177,8 +183,8 @@ describe('Claim redemption lifecycle (integration) [issue #820]', () => {
       return Promise.resolve();
     });
 
-    // Both DB transactions share the same manager behaviour; the second one is
-    // only used for bookkeeping and does not read via the query builder.
+    // All DB transactions share the same manager behaviour; the sweep lock
+    // (#826) and the finalise transaction do not read via the query builder.
     dataSource.transaction.mockImplementation(
       (cb: (m: unknown) => Promise<unknown>) => cb(makeManager()),
     );
@@ -256,8 +262,9 @@ describe('Claim redemption lifecycle (integration) [issue #820]', () => {
     expect(result.txHash).toBe(MOCK_TX_HASH);
     expect(result.destination).toBe(VALID_DESTINATION);
 
-    // Two DB transactions: one to take the claim slot, one to finalise.
-    expect(dataSource.transaction).toHaveBeenCalledTimes(2);
+    // Three DB transactions: one to take the claim slot, one to serialize the
+    // sweep on the SweepController nonce lock (#826), and one to finalise.
+    expect(dataSource.transaction).toHaveBeenCalledTimes(3);
     // The payout ran exactly once, after the contract call.
     expect(transactionProvider.executeSweepTransaction).toHaveBeenCalledTimes(
       1,

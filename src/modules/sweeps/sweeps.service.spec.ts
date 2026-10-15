@@ -1,6 +1,7 @@
 import { jest } from '@jest/globals';
 import { Test, TestingModule } from '@nestjs/testing';
 import { HttpException } from '@nestjs/common';
+import { getDataSourceToken } from '@nestjs/typeorm';
 import { SweepsService } from './sweeps.service.js';
 import { ValidationProvider } from './providers/validation.provider.js';
 import { ContractProvider } from './providers/contract.provider.js';
@@ -71,7 +72,38 @@ describe('SweepsService', () => {
   };
   let configMock: { getOrThrow: jest.Mock };
 
+  // #826: a DataSource whose `transaction()` serializes callbacks, modelling
+  // the mutual exclusion pg_advisory_xact_lock provides in production. A
+  // caller's callback does not start until the previous transaction settles;
+  // a rejection releases the "lock" (the chain continues).
+  type Manager = { query: jest.Mock<() => Promise<unknown>> };
+  let managers: Manager[];
+  let dataSource: {
+    transaction: jest.Mock<
+      (cb: (manager: Manager) => Promise<unknown>) => Promise<unknown>
+    >;
+  };
+
   beforeEach(async () => {
+    let tail: Promise<unknown> = Promise.resolve();
+    managers = [];
+    dataSource = {
+      transaction: jest
+        .fn<any>()
+        .mockImplementation((cb: (manager: Manager) => Promise<unknown>) => {
+          const manager: Manager = {
+            query: jest.fn<any>().mockResolvedValue(undefined),
+          };
+          managers.push(manager);
+          const run = tail.then(() => cb(manager));
+          tail = run.then(
+            () => undefined,
+            () => undefined,
+          );
+          return run;
+        }),
+    };
+
     validationProvider = {
       validateSweepParameters: jest.fn<any>().mockResolvedValue(undefined),
       canSweep: jest.fn<any>().mockResolvedValue(true),
@@ -116,6 +148,7 @@ describe('SweepsService', () => {
         { provide: TransactionProvider, useValue: transactionProvider },
         { provide: StellarService, useValue: stellarService },
         { provide: ConfigService, useValue: configMock },
+        { provide: getDataSourceToken(), useValue: dataSource },
         {
           provide: getToken('sweep_success_total'),
           useValue: { inc: jest.fn() },
@@ -525,6 +558,176 @@ describe('SweepsService', () => {
   // -------------------------------------------------------------------------
   // canSweep / getSweepStatus — delegates unchanged
   // -------------------------------------------------------------------------
+
+  // -------------------------------------------------------------------------
+  // #826: serialize the shared SweepController nonce across instances
+  // -------------------------------------------------------------------------
+
+  describe('executeSweep — #826 nonce serialization', () => {
+    it('holds a per-controller advisory lock around read-nonce → sign → submit', async () => {
+      await service.executeSweep(validRequest);
+
+      expect(dataSource.transaction).toHaveBeenCalledTimes(1);
+      const [manager] = managers;
+      // Bounds the wait first, then takes the transaction-scoped lock.
+      expect(manager.query).toHaveBeenNthCalledWith(
+        1,
+        'SET LOCAL lock_timeout = 10000',
+      );
+      expect(manager.query).toHaveBeenNthCalledWith(
+        2,
+        'SELECT pg_advisory_xact_lock($1::bigint)',
+        [expect.stringMatching(/^-?\d+$/)],
+      );
+    });
+
+    it('keys the lock on the SweepController contract ID, not the account', async () => {
+      const { advisoryLockKey } = await import(
+        '../../common/locks/advisory-lock.util.js'
+      );
+      await service.executeSweep(validRequest);
+
+      const [[, [key]]] = managers[0].query.mock.calls.filter(
+        (call) => call[0] === 'SELECT pg_advisory_xact_lock($1::bigint)',
+      );
+      expect(key).toBe(
+        advisoryLockKey('sweep-controller-nonce', 'SWEEP_CTRL_CONTRACT_ID'),
+      );
+      expect(key).not.toBe(
+        advisoryLockKey('sweep-controller-nonce', MOCK_ACCOUNT_CONTRACT_ID),
+      );
+    });
+
+    it('serializes two concurrent sweeps: the second waits and signs the next nonce', async () => {
+      stellarService.getSweepNonce
+        .mockResolvedValueOnce(1n)
+        .mockResolvedValueOnce(2n);
+
+      let signalFirstInContract: () => void = () => {};
+      const firstInContract = new Promise<void>((resolve) => {
+        signalFirstInContract = resolve;
+      });
+      let releaseFirst: () => void = () => {};
+      const firstGate = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+
+      let contractCalls = 0;
+      stellarService.executeSweep.mockImplementation(async () => {
+        contractCalls += 1;
+        if (contractCalls === 1) {
+          signalFirstInContract();
+          await firstGate;
+        }
+      });
+
+      const first = service.executeSweep(validRequest);
+      const second = service.executeSweep(validRequest);
+
+      // Wait until the first sweep is inside the contract call (holding the
+      // lock) before inspecting the second.
+      await firstInContract;
+      // The second must not have read the nonce while the lock was held.
+      expect(stellarService.getSweepNonce).toHaveBeenCalledTimes(1);
+
+      releaseFirst();
+      await Promise.all([first, second]);
+
+      expect(stellarService.getSweepNonce).toHaveBeenCalledTimes(2);
+      const signedNonces =
+        contractProvider.generateAuthSignature.mock.calls.map(
+          (call) => (call[0] as { nonce: bigint }).nonce,
+        );
+      expect(signedNonces).toEqual([1n, 2n]);
+    });
+
+    it('releases the lock after a failing sweep so the next sweep proceeds', async () => {
+      stellarService.executeSweep
+        .mockRejectedValueOnce(new Error('tx_bad_seq'))
+        .mockResolvedValueOnce(undefined);
+
+      await expect(service.executeSweep(validRequest)).rejects.toThrow(
+        'tx_bad_seq',
+      );
+
+      const result = await service.executeSweep(validRequest);
+      expect(result.success).toBe(true);
+      expect(dataSource.transaction).toHaveBeenCalledTimes(2);
+    });
+
+    it('retries once with a freshly read nonce on InvalidNonce', async () => {
+      stellarService.getSweepNonce
+        .mockResolvedValueOnce(5n)
+        .mockResolvedValueOnce(6n);
+      stellarService.executeSweep
+        .mockRejectedValueOnce(
+          new Error(
+            'Transaction simulation failed: HostError: Error(Contract, #11)',
+          ),
+        )
+        .mockResolvedValueOnce(undefined);
+      jest.spyOn(service['logger'], 'warn').mockImplementation(() => {});
+
+      const result = await service.executeSweep(validRequest);
+
+      expect(result.success).toBe(true);
+      expect(stellarService.getSweepNonce).toHaveBeenCalledTimes(2);
+      expect(stellarService.executeSweep).toHaveBeenCalledTimes(2);
+      const signedNonces =
+        contractProvider.generateAuthSignature.mock.calls.map(
+          (call) => (call[0] as { nonce: bigint }).nonce,
+        );
+      expect(signedNonces).toEqual([5n, 6n]);
+    });
+
+    it('does not retry a deterministic contract failure (maps it to 502)', async () => {
+      stellarService.executeSweep.mockRejectedValue(
+        new Error('HostError: Error(Auth, InvalidAction)'),
+      );
+      jest.spyOn(service['logger'], 'error').mockImplementation(() => {});
+
+      let caught: unknown;
+      try {
+        await service.executeSweep(validRequest);
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toBeInstanceOf(HttpException);
+      expect((caught as HttpException).getStatus()).toBe(502);
+      expect(stellarService.getSweepNonce).toHaveBeenCalledTimes(1);
+      expect(stellarService.executeSweep).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not hold the lock during the Horizon payout', async () => {
+      const order: string[] = [];
+      const inner = dataSource.transaction.getMockImplementation();
+      dataSource.transaction.mockImplementation(async (cb) => {
+        order.push('lock-enter');
+        const result = await inner!(cb);
+        order.push('lock-exit');
+        return result;
+      });
+      transactionProvider.executeSweepTransaction.mockImplementation(() => {
+        order.push('payout');
+        return Promise.resolve(mockTxResult as any);
+      });
+
+      await service.executeSweep(validRequest);
+
+      expect(order).toContain('lock-enter');
+      expect(order.indexOf('lock-exit')).toBeLessThan(order.indexOf('payout'));
+    });
+
+    it('does not acquire the lock on a skip-contract-auth retry', async () => {
+      await service.executeSweep({
+        ...validRequest,
+        skipContractAuth: true,
+      });
+
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+    });
+  });
 
   describe('canSweep', () => {
     it('delegates to ValidationProvider', async () => {
