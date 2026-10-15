@@ -149,7 +149,7 @@ describe('ContractProvider', () => {
 
     mockOperation = {
       type: 'invokeHostFunction',
-    } as Operation;
+    };
 
     mockTransaction = {
       hash: jest.fn(() => Buffer.from('mock-tx-hash')),
@@ -1108,7 +1108,7 @@ describe('ContractProvider', () => {
 
       for (const testCase of testCases) {
         const message = `${testCase.ephemeralPublicKey}:${testCase.destinationAddress}`;
-        const sigHash = hash(Buffer.from(message)).toString('hex');
+        const sigHash = Buffer.from(hash(Buffer.from(message))).toString('hex');
         const inputKey = `${testCase.ephemeralPublicKey}:${testCase.destinationAddress}`;
 
         // Verify no collision with previous signatures
@@ -1391,7 +1391,9 @@ describe('ContractProvider', () => {
 
       // Manually compute expected hash
       const message = `${validParams.ephemeralPublicKey}:${validParams.destinationAddress}:${timestamp}`;
-      const expectedHash = hash(Buffer.from(message)).toString('hex');
+      const expectedHash = Buffer.from(hash(Buffer.from(message))).toString(
+        'hex',
+      );
 
       expect(result).toBe(expectedHash);
     });

@@ -270,7 +270,9 @@ export class ContractProvider {
   ): string {
     const ts = timestamp ?? Date.now();
     const message = `${ephemeralKey}:${destination}:${ts}`;
+    // SDK v17: hash() returns a Uint8Array — Buffer.from(...) restores the
+    // hex-encoding argument (Uint8Array.toString() takes no encoding).
     const hashBuffer = hash(Buffer.from(message));
-    return hashBuffer.toString('hex');
+    return Buffer.from(hashBuffer).toString('hex');
   }
 }

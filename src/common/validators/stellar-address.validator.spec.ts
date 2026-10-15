@@ -46,9 +46,12 @@ describe('StellarAddressValidator', () => {
     // defaults, because the signing/sweep path only ever handles classic
     // Ed25519 account IDs.
     const contractAddress = StrKey.encodeContract(Buffer.alloc(32, 7));
+    // SDK v17: encodeMed25519PublicKey takes the raw 40-byte payload
+    // (32-byte Ed25519 key + 8-byte big-endian muxed ID) in one argument.
+    const muxedId = Buffer.alloc(8);
+    muxedId.writeBigUInt64BE(12345n);
     const muxedAccount = StrKey.encodeMed25519PublicKey(
-      Buffer.alloc(32, 9),
-      12345,
+      Buffer.concat([Buffer.alloc(32, 9), muxedId]),
     );
 
     it('rejects a contract address by default', () => {
