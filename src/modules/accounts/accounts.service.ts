@@ -208,6 +208,9 @@ export class AccountsService {
           sweepControllerContractId: this.configService.getOrThrow<string>(
             'stellar.contracts.sweepController',
           ),
+          // #827: needed so an issued-asset account can sign its own
+          // trustline during creation.
+          ephemeralSecret: ephemeralKeypair.secret(),
         });
 
       // Both Horizon and contract succeeded — advance to real status.

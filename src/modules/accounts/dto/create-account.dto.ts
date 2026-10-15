@@ -8,14 +8,60 @@ import {
   Max,
   ValidateIf,
   Matches,
+  registerDecorator,
+  ValidationOptions,
 } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { IsStellarPublicKey } from '../../../common/validators/is-stellar-public-key.validator.js';
 import { IsBoundedMetadata } from '../../../common/validators/is-bounded-metadata.validator.js';
+import { isAllowedAssetIssuer } from '../../../config/stellar.config.js';
 
 // 'native' should be added to regex in the future.
 const ASSET_CODE_REGEX = /^[A-Z0-9]{1,12}$/;
 const ASSET_ISSUER_REGEX = /^G[A-Z0-9]{55}$/;
+
+/**
+ * #827: the native asset can be written as `native` (the API convention) or
+ * `XLM`; both mean XLM and neither needs an issuer.
+ */
+function isNativeAssetCode(assetCode?: string): boolean {
+  if (!assetCode) {
+    return true;
+  }
+  const normalized = assetCode.trim().toLowerCase();
+  return normalized === 'native' || normalized === 'xlm';
+}
+
+/**
+ * #827: asset_issuer must be on the configured per-network allow-list, so an
+ * arbitrary `CODE:ISSUER` cannot be used for an issued-asset account. An
+ * absent issuer is left to the `@ValidateIf`/`@Matches` rules so the
+ * "required when non-native" behaviour is unchanged.
+ */
+export function IsAllowedAssetIssuer(validationOptions?: ValidationOptions) {
+  return function (object: object, propertyName: string): void {
+    registerDecorator({
+      name: 'isAllowedAssetIssuer',
+      target: object.constructor,
+      propertyName,
+      options: validationOptions,
+      validator: {
+        validate(value: unknown): boolean {
+          if (typeof value !== 'string' || value.length === 0) {
+            return true;
+          }
+          return isAllowedAssetIssuer(value);
+        },
+        defaultMessage(): string {
+          return (
+            'asset_issuer is not an allowed issuer for this network; only ' +
+            'supported issued assets (e.g. USDC) may be used'
+          );
+        },
+      },
+    });
+  };
+}
 
 export class CreateAccountDto {
   @ApiProperty({
@@ -63,16 +109,18 @@ export class CreateAccountDto {
   @ApiProperty({
     example: 'GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5',
     description:
-      'Stellar public key of the asset issuer. Required when asset_code is a non-native issued asset.',
+      'Stellar public key of the asset issuer. Required when asset_code is a non-native issued asset. ' +
+      'Must be on the configured allow-list of supported issuers for the network (e.g. USDC).',
     required: false,
   })
-  @ValidateIf((o: CreateAccountDto) => !!o.asset_code && o.asset_code !== 'XLM')
+  @ValidateIf((o: CreateAccountDto) => !isNativeAssetCode(o.asset_code))
   @IsString()
   @IsNotEmpty()
   @Matches(ASSET_ISSUER_REGEX, {
     message:
       'asset_issuer must be a valid Stellar public key (56 characters, starts with G)',
   })
+  @IsAllowedAssetIssuer()
   asset_issuer?: string;
 
   @ApiProperty({

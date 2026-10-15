@@ -1,5 +1,21 @@
 import { registerAs } from '@nestjs/config';
 
+export type StellarNetwork = 'mainnet' | 'testnet';
+
+/**
+ * #827: default allow-list of asset issuers per network.
+ *
+ * Only issuers on this list may be used for issued-asset ephemeral accounts,
+ * so an API caller cannot mint an arbitrary asset code that merely happens to
+ * validate as `CODE:ISSUER`. The defaults are the Circle USDC issuers;
+ * operators can override them per deployment (see
+ * {@link getAllowedAssetIssuers}).
+ */
+const DEFAULT_ALLOWED_ASSET_ISSUERS: Record<StellarNetwork, string[]> = {
+  mainnet: ['GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN'],
+  testnet: ['GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5'],
+};
+
 export default registerAs('stellar', () => ({
   network: getNetwork(),
   horizonUrl:
@@ -36,9 +52,11 @@ export default registerAs('stellar', () => ({
   sweepAuthorizedSigner: process.env.STELLAR_SWEEP_AUTHORIZED_SIGNER,
   encryptionKey: process.env.ENCRYPTION_KEY || '64_char_hex_string_here',
   sweepControllerContractId: process.env.SWEEP_CONTROLLER_CONTRACT_ID,
+  // #827: the issuers a non-native asset may be denominated in on this network.
+  allowedAssetIssuers: getAllowedAssetIssuers(),
 }));
 
-function getNetwork(): 'mainnet' | 'testnet' {
+function getNetwork(): StellarNetwork {
   const network = process.env.STELLAR_NETWORK || 'testnet';
   if (network !== 'mainnet' && network !== 'testnet') {
     throw new Error(
@@ -46,4 +64,46 @@ function getNetwork(): 'mainnet' | 'testnet' {
     );
   }
   return network;
+}
+
+/**
+ * #827: the allow-list of asset issuers for `network` (defaults to the
+ * configured network).
+ *
+ * Precedence: a per-network env override
+ * (`ASSET_ISSUER_ALLOWLIST_MAINNET` / `ASSET_ISSUER_ALLOWLIST_TESTNET`), then
+ * the generic `ASSET_ISSUER_ALLOWLIST`, then the built-in defaults. Each value
+ * is a comma-separated list of Stellar public keys; empty entries are ignored
+ * and an all-empty override falls back to the defaults.
+ */
+export function getAllowedAssetIssuers(
+  network: StellarNetwork = getNetwork(),
+): string[] {
+  const envKey =
+    network === 'mainnet'
+      ? 'ASSET_ISSUER_ALLOWLIST_MAINNET'
+      : 'ASSET_ISSUER_ALLOWLIST_TESTNET';
+  const configured = process.env[envKey] ?? process.env.ASSET_ISSUER_ALLOWLIST;
+
+  if (configured !== undefined) {
+    const parsed = configured
+      .split(',')
+      .map((issuer) => issuer.trim())
+      .filter((issuer) => issuer.length > 0);
+    if (parsed.length > 0) {
+      return parsed;
+    }
+  }
+
+  return DEFAULT_ALLOWED_ASSET_ISSUERS[network];
+}
+
+/**
+ * #827: whether `issuer` is an allowed issuer for `network`.
+ */
+export function isAllowedAssetIssuer(
+  issuer: string,
+  network: StellarNetwork = getNetwork(),
+): boolean {
+  return getAllowedAssetIssuers(network).includes(issuer);
 }

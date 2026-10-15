@@ -77,16 +77,16 @@ token — see [Where the claim token comes from](#where-the-claim-token-comes-fr
 }
 ```
 
-| Field              | Required | Notes                                                                                              |
-| ------------------ | -------- | -------------------------------------------------------------------------------------------------- |
-| `fundingSource`    | Yes      | Stellar public key funding the account. StrKey-validated.                                          |
-| `recovery_address` | Yes      | Where funds go if the account expires unclaimed.                                                   |
-| `amount`           | Yes      | Decimal string, 7 decimal places.                                                                  |
-| `asset_code`       | No       | 1–12 uppercase alphanumerics. Use `native` for XLM.                                                |
-| `asset_issuer`     | No       | Required when `asset_code` is a non-native issued asset.                                           |
-| `expiresIn`        | No       | Seconds, 1 hour – 30 days. See [`expiresIn`](#createaccountdtoexpiresin).                          |
-| `senderAddress`    | No       | Sender wallet (StrKey). A `sender`-scoped token always stamps its own; an admin token may set any. |
-| `metadata`         | No       | Free-form object. Bounded and PII-stripped — see below.                                            |
+| Field              | Required | Notes                                                                                                                           |
+| ------------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `fundingSource`    | Yes      | Stellar public key funding the account. StrKey-validated.                                                                       |
+| `recovery_address` | Yes      | Where funds go if the account expires unclaimed.                                                                                |
+| `amount`           | Yes      | Decimal string, 7 decimal places.                                                                                               |
+| `asset_code`       | No       | 1–12 uppercase alphanumerics. Use `native` for XLM.                                                                             |
+| `asset_issuer`     | No       | Required when `asset_code` is a non-native issued asset and must be a supported issuer for the network (e.g. USDC) — see below. |
+| `expiresIn`        | No       | Seconds, 1 hour – 30 days. See [`expiresIn`](#createaccountdtoexpiresin).                                                       |
+| `senderAddress`    | No       | Sender wallet (StrKey). A `sender`-scoped token always stamps its own; an admin token may set any.                              |
+| `metadata`         | No       | Free-form object. Bounded and PII-stripped — see below.                                                                         |
 
 **Response `201`** — [`AccountResponseDto`](../src/modules/accounts/dto/account-response.dto.ts)
 
@@ -112,6 +112,27 @@ creation time.
 
 The ephemeral account's Stellar **secret key is never returned**. It is
 encrypted at rest and only decrypted in-memory at redemption time.
+
+#### Issued assets (e.g. USDC)
+
+Supplying a non-native `asset_code` (anything other than `native`/`XLM`)
+requires an `asset_issuer`, and that issuer must be on the deployment's
+per-network **allow-list** of supported issuers — otherwise the request is
+rejected with `400` and the issuer cannot be used. This stops an arbitrary
+`CODE:ISSUER` from being minted by a caller.
+
+The built-in defaults are the Circle USDC issuers (mainnet
+`GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN`, testnet
+`GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5`) and can be
+overridden with `ASSET_ISSUER_ALLOWLIST` (or the per-network
+`ASSET_ISSUER_ALLOWLIST_MAINNET` / `ASSET_ISSUER_ALLOWLIST_TESTNET`), a
+comma-separated list of issuer public keys.
+
+When an issued asset is created, the ephemeral account is funded with an extra
+base reserve and a trustline to the issuer is established during creation, so
+the account can receive that asset. Sweeping an issued asset additionally
+requires the **destination** to already hold a trustline to the issuer, or the
+sweep is rejected with `400 DESTINATION_NO_TRUSTLINE`.
 
 **Errors:** `400` invalid input · `401` missing/invalid API JWT · `429`
 rate limited
@@ -263,8 +284,9 @@ resume without re-authorising. Do not mint a new account in this state.
 Redeeming an already-redeemed token is idempotent and returns the original
 result with `message: "Claim was already redeemed"`.
 
-**Errors:** `400` invalid destination / not yet funded · `401` invalid or
-expired token · `409` already being processed · `429` rate limited
+**Errors:** `400` invalid destination / not yet funded / no trustline
+(`DESTINATION_NO_TRUSTLINE`) · `401` invalid or expired token · `409` already
+being processed · `429` rate limited
 
 ### `GET /claims/:id`
 
