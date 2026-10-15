@@ -30,6 +30,7 @@
     "audit:secrets": "ts-node --esm src/scripts/audit-legacy-secret-formats.ts",
     "check:embedded-postgres-types": "node scripts/check-embedded-postgres-types.cjs",
     "test:migrations": "node --loader ts-node/esm test/migrations.integration.runner.ts",
+    "test:claim-lookup-index": "node --loader ts-node/esm test/claim-lookup-index.runner.ts",
     "check:stellar-sdk-pin": "node scripts/check-stellar-sdk-pin.cjs",
     "test:mutation": "stryker run"
   },
