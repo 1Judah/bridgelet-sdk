@@ -72,3 +72,10 @@ environment variable that gets copied between environments. Changing them is
 a deliberate code change; update this document and
 `claims.redeem-throttle.spec.ts` (which asserts the exact values) in the same
 PR.
+
+## Verification notes
+
+- **`/claims/redeem` throttling (#747):** the route has an explicit `@Throttle` limit, asserted by `src/modules/claims/claims.redeem-throttle.spec.ts` (repeated invalid redemptions get throttled).
+- **Claim token expiry vs. account expiry (#748):** `CLAIM_TOKEN_EXPIRY` (default 30 days) can exceed an account's own `expiresAt`. `TokenVerificationProvider` rejects tokens for already-expired accounts explicitly rather than relying on a downstream 404; see `claim-token-expiry-audit.spec.ts`.
+- **Metadata limits (#746):** `sanitizeMetadata()` rules (prototype-pollution keys, size and depth bounds) are enumerated in `metadata-sanitizer.util.spec.ts`; size/depth is also enforced before sanitization by `@IsBoundedMetadata()`.
+- **Webhook secrets (#749):** `CreateWebhookDto.secret` requires at least 16 characters from `[A-Za-z0-9_-]`, and `WebhookResponseDto` never returns the secret.
