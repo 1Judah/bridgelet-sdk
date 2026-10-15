@@ -569,8 +569,8 @@ export class StellarService {
     }
 
     // Parse the returned ScVal - shape mirrors AccountInfo struct in bridgelet-core.
-    // SDK v17: ScVal is a variant union narrowed by `.type`, arm payload is a
-    // plain property (the v14 `.switch()`/`.map()` accessors no longer exist).
+    // ScVal is an XDR union; inspect its discriminant with switch() and read
+    // the active arm through its generated accessor.
     const returnVal = simResult.result?.retval;
     if (!returnVal)
       throw new Error(`get_info returned no value for ${contractId}`);
@@ -581,18 +581,23 @@ export class StellarService {
       );
     }
 
-    const mapEntries = returnVal.map;
-    const fields = mapEntries.map((entry) => ({
-      key: entry.key.type === 'scvSymbol' ? entry.key.value : '',
+    const symToString = (sym: string | { toString(): string }): string =>
+      typeof sym === 'string'
+        ? sym
+        : sym instanceof Uint8Array
+          ? Buffer.from(sym).toString('utf8')
+          : sym.toString();
+
+    const fields = returnVal.map.map((entry) => ({
+      key: entry.key.type === 'scvSymbol' ? symToString(entry.key.sym) : '',
       val: entry.val,
     }));
 
     const get = (key: string) => fields.find((f) => f.key === key)?.val;
 
-    // Arm-narrowed field reads: a non-matching arm yields undefined so the
-    // `?? fallback` below applies, matching the previous `?.u32() ?? x` chain.
     const asU32 = (val: ReturnType<typeof get>) =>
       val?.type === 'scvU32' ? val.u32 : undefined;
+
     const asBool = (val: ReturnType<typeof get>) =>
       val?.type === 'scvBool' ? val.b : undefined;
 
@@ -656,12 +661,11 @@ export class StellarService {
       );
     }
 
-    // The contract returns u64 (Rust `u64`), which SDK v17 surfaces as a
-    // ScValU64 variant whose `.u64` payload is a real bigint.
+    // The contract returns u64 (Rust `u64`); inspect the XDR union arm before
+    // reading its generated accessor.
     if (returnVal.type !== 'scvU64') {
       throw new Error(
-        `get_nonce returned unexpected ScVal type for ` +
-          `${sweepControllerContractId}: ${returnVal.type}`,
+        `get_nonce returned unexpected ScVal type for ${sweepControllerContractId}`,
       );
     }
 
