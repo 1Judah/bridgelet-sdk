@@ -76,6 +76,20 @@ export class CreateAccountDto {
   asset_issuer?: string;
 
   @ApiProperty({
+    example: 'GSENDER...',
+    description:
+      'Stellar public key of the sender who owns this account. Used to scope ' +
+      'GET /accounts and GET /accounts/:id for sender-scoped API tokens. ' +
+      'Optional: a sender-scoped token always stamps its own address, and an ' +
+      'admin token may leave it unset.',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  @IsStellarPublicKey()
+  senderAddress?: string;
+
+  @ApiProperty({
     example: 2592000,
     description: 'Expiry in seconds (1 hour - 30 days)',
   })

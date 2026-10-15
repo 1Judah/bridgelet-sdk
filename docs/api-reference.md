@@ -41,6 +41,18 @@ An OpenAPI/Swagger UI is also served by the running app (see
 The API JWT must carry `type: "api"`. A token minted for a different purpose
 (for example a `type: "claim"` claim token) is rejected with `401`.
 
+A token may also carry a `scope`:
+
+| `scope`          | Effect on `/accounts/*`                                                                                 |
+| ---------------- | ------------------------------------------------------------------------------------------------------- |
+| absent / `admin` | Sees every account (the default, and what existing deployments use).                                    |
+| `sender`         | Only sees accounts whose `senderAddress` equals the token's `senderAddress` claim. Requires that claim. |
+
+`POST /accounts` stamps `senderAddress` from a `sender`-scoped token (an
+explicit body value for a _different_ wallet is rejected with `403`). An admin
+token may set any `senderAddress` in the body, or none. See
+[FUTURE_AUTH_SCOPING.md](./FUTURE_AUTH_SCOPING.md).
+
 `/claims/*` is deliberately unauthenticated: the claim token _is_ the bearer
 credential, and those routes are rate limited instead (see
 [Rate limits](#rate-limits)).
@@ -65,15 +77,16 @@ token — see [Where the claim token comes from](#where-the-claim-token-comes-fr
 }
 ```
 
-| Field              | Required | Notes                                                                     |
-| ------------------ | -------- | ------------------------------------------------------------------------- |
-| `fundingSource`    | Yes      | Stellar public key funding the account. StrKey-validated.                 |
-| `recovery_address` | Yes      | Where funds go if the account expires unclaimed.                          |
-| `amount`           | Yes      | Decimal string, 7 decimal places.                                         |
-| `asset_code`       | No       | 1–12 uppercase alphanumerics. Use `native` for XLM.                       |
-| `asset_issuer`     | No       | Required when `asset_code` is a non-native issued asset.                  |
-| `expiresIn`        | No       | Seconds, 1 hour – 30 days. See [`expiresIn`](#createaccountdtoexpiresin). |
-| `metadata`         | No       | Free-form object. Bounded and PII-stripped — see below.                   |
+| Field              | Required | Notes                                                                                              |
+| ------------------ | -------- | -------------------------------------------------------------------------------------------------- |
+| `fundingSource`    | Yes      | Stellar public key funding the account. StrKey-validated.                                          |
+| `recovery_address` | Yes      | Where funds go if the account expires unclaimed.                                                   |
+| `amount`           | Yes      | Decimal string, 7 decimal places.                                                                  |
+| `asset_code`       | No       | 1–12 uppercase alphanumerics. Use `native` for XLM.                                                |
+| `asset_issuer`     | No       | Required when `asset_code` is a non-native issued asset.                                           |
+| `expiresIn`        | No       | Seconds, 1 hour – 30 days. See [`expiresIn`](#createaccountdtoexpiresin).                          |
+| `senderAddress`    | No       | Sender wallet (StrKey). A `sender`-scoped token always stamps its own; an admin token may set any. |
+| `metadata`         | No       | Free-form object. Bounded and PII-stripped — see below.                                            |
 
 **Response `201`** — [`AccountResponseDto`](../src/modules/accounts/dto/account-response.dto.ts)
 
@@ -119,16 +132,20 @@ Stripping is silent; exceeding the size limit is a `400`.
 
 ### `GET /accounts/:id`
 
-Fetch the current lifecycle state of one account.
+Fetch the current lifecycle state of one account. For a `sender`-scoped
+token, an account belonging to a different wallet returns `404` (not `403`)
+so the caller cannot tell it apart from an account that does not exist.
 
 **Response `200`** — `AccountResponseDto`, same shape as `POST /accounts`.
 `claimUrl` is `null` once the account has been claimed or expired.
 
-**Errors:** `401` · `404` not found (including soft-deleted accounts)
+**Errors:** `401` · `404` not found (including soft-deleted accounts, and
+accounts outside a `sender` token's scope)
 
 ### `GET /accounts`
 
-Admin listing with pagination.
+Listing with pagination. An admin token sees every account; a `sender`-scoped
+token only sees accounts stamped with its own `senderAddress`.
 
 | Query param | Default | Notes                                                      |
 | ----------- | ------- | ---------------------------------------------------------- |

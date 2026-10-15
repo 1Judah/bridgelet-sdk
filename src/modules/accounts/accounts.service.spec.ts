@@ -2,7 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { NotFoundException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { getToken } from '@willsoto/nestjs-prometheus';
 import { AccountsService } from './accounts.service.js';
 import { Account } from './entities/account.entity.js';
@@ -13,9 +13,24 @@ import { CreateAccountDto } from './dto/create-account.dto.js';
 import { AccountLatencyMetricsProvider } from './providers/account-latency-metrics.provider.js';
 import { KmsKeyProvider } from '../../common/crypto/kms-key.provider.js';
 import { Registry, register } from 'prom-client';
+import {
+  ADMIN_CALLER,
+  AuthenticatedCaller,
+} from '../../common/guards/jwt-auth.guard.js';
 
 const VALID_KEY = 'G' + 'A'.repeat(55);
 const VALID_KEY2 = 'G' + 'B'.repeat(55);
+// #825: two distinct sender wallets for scope tests
+const SENDER_A = 'G' + 'C'.repeat(55);
+const SENDER_B = 'G' + 'D'.repeat(55);
+const senderACaller: AuthenticatedCaller = {
+  scope: 'sender',
+  senderAddress: SENDER_A,
+};
+const senderBCaller: AuthenticatedCaller = {
+  scope: 'sender',
+  senderAddress: SENDER_B,
+};
 // #811: contract ID of the instance deployed for one account
 const DEPLOYED_CONTRACT_ID =
   'CBVSQFKKFONF6MPNQSZYEXGIHLFEFT3QLNNW2XTFE3PMADLSRDVBC552';
@@ -66,6 +81,7 @@ function makeAccount(overrides: Partial<Account> = {}): Account {
     fundingSource: VALID_KEY2,
     amount: '100',
     asset: 'native',
+    senderAddress: null,
     status: AccountStatus.PENDING_PAYMENT,
     claimTokenHash: 'hash',
     destinationAddress: null,
@@ -231,6 +247,36 @@ describe('AccountsService', () => {
 
       await expect(service.create(dto)).rejects.toThrow('raw string error');
     });
+
+    // #825: senderAddress stamping / scope enforcement
+    it('stamps the caller sender address for a sender-scoped caller', async () => {
+      setupCreateSuccess();
+
+      await service.create(dto, senderACaller);
+
+      expect(mockRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ senderAddress: SENDER_A }),
+      );
+    });
+
+    it('rejects a sender-scoped caller that tags a different wallet (#825)', async () => {
+      setupCreateSuccess();
+
+      await expect(
+        service.create({ ...dto, senderAddress: SENDER_B }, senderACaller),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockRepo.create).not.toHaveBeenCalled();
+    });
+
+    it('lets an admin caller stamp an explicit sender address', async () => {
+      setupCreateSuccess();
+
+      await service.create({ ...dto, senderAddress: SENDER_B }, ADMIN_CALLER);
+
+      expect(mockRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ senderAddress: SENDER_B }),
+      );
+    });
   });
 
   // ─── findOne ─────────────────────────────────────────────────────────────
@@ -269,6 +315,46 @@ describe('AccountsService', () => {
       const result = await service.findOne('uuid-1');
 
       expect(result.claimUrl).toContain('***');
+    });
+
+    // #825: sender-scoped reads
+    it('lets a sender read an account it owns', async () => {
+      mockRepo.findOne.mockResolvedValue(
+        makeAccount({ senderAddress: SENDER_A }),
+      );
+
+      const result = await service.findOne('uuid-1', senderACaller);
+
+      expect(result.accountId).toBe('uuid-1');
+    });
+
+    it("returns 404 for another sender's account", async () => {
+      // Account belongs to B; caller is scoped to A.
+      mockRepo.findOne.mockResolvedValue(
+        makeAccount({ senderAddress: SENDER_B }),
+      );
+
+      await expect(service.findOne('uuid-1', senderACaller)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('lets an admin read any account', async () => {
+      mockRepo.findOne.mockResolvedValue(
+        makeAccount({ senderAddress: SENDER_B }),
+      );
+
+      const result = await service.findOne('uuid-1', ADMIN_CALLER);
+
+      expect(result.accountId).toBe('uuid-1');
+    });
+
+    it('hides untagged accounts from a sender-scoped caller', async () => {
+      mockRepo.findOne.mockResolvedValue(makeAccount({ senderAddress: null }));
+
+      await expect(service.findOne('uuid-1', senderACaller)).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 
@@ -333,6 +419,31 @@ describe('AccountsService', () => {
 
       expect(result.total).toBe(0);
       expect(result.accounts).toHaveLength(0);
+    });
+
+    // #825: listing scope
+    it('filters by the caller sender address for a sender-scoped token', async () => {
+      const qb = makeQueryBuilder([], 0);
+      mockRepo.createQueryBuilder.mockReturnValue(qb);
+
+      await service.findAll({ limit: 50, offset: 0 }, senderACaller);
+
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        'account.senderAddress = :senderAddress',
+        { senderAddress: SENDER_A },
+      );
+    });
+
+    it('does not filter by sender for an admin-scoped token', async () => {
+      const qb = makeQueryBuilder([], 0);
+      mockRepo.createQueryBuilder.mockReturnValue(qb);
+
+      await service.findAll({ limit: 50, offset: 0 }, ADMIN_CALLER);
+
+      expect(qb.andWhere).not.toHaveBeenCalledWith(
+        'account.senderAddress = :senderAddress',
+        expect.anything(),
+      );
     });
   });
 });

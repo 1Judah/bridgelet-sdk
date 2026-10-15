@@ -1,4 +1,9 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Repository } from 'typeorm';
 import { Account } from './entities/account.entity.js';
@@ -20,6 +25,10 @@ import { sanitizeMetadata } from '../../common/utils/metadata-sanitizer.util.js'
 import { InjectMetric } from '@willsoto/nestjs-prometheus';
 import { Counter } from 'prom-client';
 import { AccountLatencyMetricsProvider } from './providers/account-latency-metrics.provider.js';
+import {
+  ADMIN_CALLER,
+  AuthenticatedCaller,
+} from '../../common/guards/jwt-auth.guard.js';
 
 /**
  * AccountsService — Service-Level Documentation & Contributor Guidance
@@ -121,9 +130,30 @@ export class AccountsService {
 
   public async create(
     createAccountDto: CreateAccountDto,
+    caller: AuthenticatedCaller = ADMIN_CALLER,
   ): Promise<AccountResponseDto> {
     this.accountCreationCounter.inc();
     const startMs = Date.now();
+
+    // #825: stamp the account with the sender that owns it. A sender-scoped
+    // caller can only ever create accounts for its own wallet, so an explicit
+    // `senderAddress` for a different wallet is rejected rather than silently
+    // used. An admin caller may tag the account with any address (or none).
+    let senderAddress: string | null;
+    if (caller.scope === 'sender') {
+      if (
+        createAccountDto.senderAddress &&
+        createAccountDto.senderAddress !== caller.senderAddress
+      ) {
+        throw new ForbiddenException(
+          'senderAddress does not match the authenticated sender',
+        );
+      }
+      senderAddress = caller.senderAddress;
+    } else {
+      senderAddress = createAccountDto.senderAddress ?? null;
+    }
+
     // Generate ephemeral keypair
     const ephemeralKeypair = this.stellarService.generateKeypair();
 
@@ -156,6 +186,7 @@ export class AccountsService {
       fundingSource: createAccountDto.fundingSource,
       amount: createAccountDto.amount,
       asset,
+      senderAddress,
       status: AccountStatus.INITIALIZING,
       claimTokenHash,
       expiresAt,
@@ -205,6 +236,7 @@ export class AccountsService {
       return {
         accountId: account.id,
         publicKey: account.publicKey,
+        senderAddress: account.senderAddress ?? null,
         claimUrl: this.generateClaimUrl(claimToken),
         txHash,
         amount: account.amount,
@@ -247,7 +279,10 @@ export class AccountsService {
     }
   }
 
-  public async findOne(id: string): Promise<AccountResponseDto> {
+  public async findOne(
+    id: string,
+    caller: AuthenticatedCaller = ADMIN_CALLER,
+  ): Promise<AccountResponseDto> {
     // Soft-deleted accounts are excluded so GET /accounts/:id 404s for them,
     // matching findAll(). Verified for #698 (duplicate of the already-resolved
     // #637, fixed in PR #771).
@@ -259,21 +294,42 @@ export class AccountsService {
       throw new NotFoundException(`Account ${id} not found`);
     }
 
+    // #825: a sender-scoped caller must not be able to tell another sender's
+    // account apart from one that does not exist, so an account it does not
+    // own 404s exactly like a missing one.
+    if (
+      caller.scope === 'sender' &&
+      account.senderAddress !== caller.senderAddress
+    ) {
+      throw new NotFoundException(`Account ${id} not found`);
+    }
+
     return this.mapToResponseDto(account);
   }
 
-  public async findAll({
-    status,
-    limit,
-    offset,
-  }: {
-    status?: AccountStatus;
-    limit: number;
-    offset: number;
-  }): Promise<{ accounts: AccountResponseDto[]; total: number }> {
+  public async findAll(
+    {
+      status,
+      limit,
+      offset,
+    }: {
+      status?: AccountStatus;
+      limit: number;
+      offset: number;
+    },
+    caller: AuthenticatedCaller = ADMIN_CALLER,
+  ): Promise<{ accounts: AccountResponseDto[]; total: number }> {
     const query = this.accountsRepository
       .createQueryBuilder('account')
       .where('account.deletedAt IS NULL');
+
+    // #825: sender-scoped callers only ever see their own accounts; an admin
+    // caller keeps the unscoped listing.
+    if (caller.scope === 'sender') {
+      query.andWhere('account.senderAddress = :senderAddress', {
+        senderAddress: caller.senderAddress,
+      });
+    }
 
     if (status) {
       query.andWhere('account.status = :status', { status });
@@ -330,6 +386,7 @@ export class AccountsService {
     return {
       accountId: account.id,
       publicKey: account.publicKey,
+      senderAddress: account.senderAddress ?? null,
       // Mapping note: we intentionally never return raw tokens here.
       // When a token exists, we return a placeholder claim URL in list/endpoints
       // that shouldn't leak the real token. The single-response `create`

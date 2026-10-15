@@ -5,11 +5,26 @@
 > `src/modules/accounts/`. Track implementation of the design below as its
 > own issue when work on it starts.
 
-**Status:** Not implemented. Current `JwtAuthGuard` only verifies signature validity -
-any validly-signed JWT gets full access to every account in the system via
-`GET /accounts` and `POST /accounts`. Fine for a single internal caller;
-becomes a real problem with multiple integrators (no data isolation, no
-per-integrator revocation).
+**Status:** Partially implemented (issue #825). `JwtAuthGuard` now reads two
+optional claims:
+
+- `scope`: `"admin"` or `"sender"`. **A token with no `scope` claim is treated
+  as admin**, so existing single-caller deployments are unaffected.
+- `senderAddress`: the wallet address a `sender`-scoped token is scoped to
+  (required when `scope` is `"sender"`; the guard rejects a sender token that
+  omits it).
+
+For a `sender`-scoped token, `GET /accounts` and `GET /accounts/:id` only
+return accounts whose `senderAddress` matches the token, and `POST /accounts`
+stamps new accounts with it. An admin token keeps the previous unscoped
+behaviour. The model chosen was **Option A - scoped JWTs** (below), rather
+than the DB-backed API keys of Option B, because it reuses the existing
+`JwtAuthGuard` and needs no new credential storage; tokens are still minted
+out-of-band.
+
+What is still **not** implemented: an admin-only endpoint/CLI to mint these
+scoped tokens, per-integrator revocation for JWT-scoped callers, and scoped
+permissions beyond "own accounts only". See [Remaining work](#remaining-work).
 
 ## The gap
 
@@ -83,3 +98,15 @@ CREATE TABLE integrators (
 - Per-integrator rate limiting (would layer on top of the existing `ThrottlerGuard`)
 - Key rotation UI/endpoint (manual DB update is fine to start)
 - Scoped permissions beyond "own accounts only" (e.g. read-only keys)
+
+## Remaining work
+
+- **Token minting.** Nothing in this repo mints scoped JWTs yet; they are
+  issued out-of-band with the same `JWT_SECRET` as API tokens. A protected
+  admin endpoint or CLI for minting (`scope`, `senderAddress`, expiry) is the
+  natural follow-up.
+- **Revocation.** A scoped JWT cannot be revoked before it expires the way an
+  API-key row can (Option B), so keep expiries short if revocation matters.
+- **Senders created via `metadata`.** `senderAddress` is a first-class column
+  now; any integration that was smuggling the wallet address into `metadata`
+  should migrate to the column.
