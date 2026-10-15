@@ -220,6 +220,6 @@ describe('the repository package.json', () => {
   const pkg = require('../package.json') as PackageJsonLike;
 
   it('pins @stellar/stellar-sdk to an exact version', () => {
-    expect(evaluateStellarSdkPin(pkg)).toEqual({ ok: true, version: '14.6.1' });
+    expect(evaluateStellarSdkPin(pkg)).toEqual({ ok: true, version: '17.2.1' });
   });
 });

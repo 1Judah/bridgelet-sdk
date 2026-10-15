@@ -23,6 +23,17 @@ export default registerAs('stellar', () => ({
     ephemeralAccountVersion: process.env.EPHEMERAL_ACCOUNT_CONTRACT_VERSION,
   },
   sweepSigningKeySeed: process.env.SWEEP_SIGNING_KEY_SEED,
+  // #823: which SweepSigner backs generateAuthSignature(). 'env-seed' (the
+  // default) signs with SWEEP_SIGNING_KEY_SEED and is refused in production
+  // by SweepSigningGuard; 'kms' signs with an asymmetric Ed25519 KMS key and
+  // is required in production.
+  sweepSignerProvider: process.env.STELLAR_SWEEP_SIGNER_PROVIDER,
+  // KMS key (KeySpec ECC_NIST_EDWARDS25519, KeyUsage SIGN_VERIFY) used when
+  // sweepSignerProvider is 'kms'.
+  sweepKmsKeyId: process.env.STELLAR_SWEEP_KMS_KEY_ID,
+  // Optional: the G... public key the selected signer must hold (the
+  // SweepController's on-chain authorized_signer). Startup fails on mismatch.
+  sweepAuthorizedSigner: process.env.STELLAR_SWEEP_AUTHORIZED_SIGNER,
   encryptionKey: process.env.ENCRYPTION_KEY || '64_char_hex_string_here',
   sweepControllerContractId: process.env.SWEEP_CONTROLLER_CONTRACT_ID,
 }));

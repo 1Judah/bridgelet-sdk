@@ -47,6 +47,14 @@ export function validateEnv(env: NodeJS.ProcessEnv = process.env): void {
     }
   }
 
+  if (
+    env.STELLAR_SWEEP_SIGNER_PROVIDER &&
+    env.STELLAR_SWEEP_SIGNER_PROVIDER !== 'env-seed' &&
+    env.STELLAR_SWEEP_SIGNER_PROVIDER !== 'kms'
+  ) {
+    errors.push('STELLAR_SWEEP_SIGNER_PROVIDER must be "env-seed" or "kms"');
+  }
+
   if (env.NODE_ENV === 'production') {
     const claimBaseUrl = env.CLAIM_BASE_URL;
     if (!claimBaseUrl || claimBaseUrl.trim() === '') {
@@ -65,6 +73,31 @@ export function validateEnv(env: NodeJS.ProcessEnv = process.env): void {
           errors.push('CLAIM_BASE_URL must be a valid http or https URL');
         }
       }
+    }
+
+    // #823: production may not fall back to the env-seed sweep signer —
+    // SweepSigningGuard refuses it at signing time, so a production app
+    // configured that way cannot sweep at all. Fail at startup instead.
+    // (ContractProvider.onModuleInit() enforces the same rule even when
+    // validateEnv() is not wired in.)
+    const sweepSignerProvider = env.STELLAR_SWEEP_SIGNER_PROVIDER ?? 'env-seed';
+    if (sweepSignerProvider === 'env-seed') {
+      errors.push(
+        'STELLAR_SWEEP_SIGNER_PROVIDER must be "kms" in production: the ' +
+          'env-seed signer (SWEEP_SIGNING_KEY_SEED) is refused by ' +
+          'SweepSigningGuard, so a production deployment with it cannot ' +
+          'sweep. Configure an asymmetric Ed25519 KMS key ' +
+          '(STELLAR_SWEEP_KMS_KEY_ID).',
+      );
+    } else if (
+      sweepSignerProvider === 'kms' &&
+      (!env.STELLAR_SWEEP_KMS_KEY_ID ||
+        env.STELLAR_SWEEP_KMS_KEY_ID.trim() === '')
+    ) {
+      errors.push(
+        'STELLAR_SWEEP_KMS_KEY_ID is required when ' +
+          'STELLAR_SWEEP_SIGNER_PROVIDER is "kms"',
+      );
     }
   }
 

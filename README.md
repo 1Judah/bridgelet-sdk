@@ -64,16 +64,16 @@ Ephemeral Stellar secret keys are encrypted at rest with AES-256-GCM (KMS-backed
 - **Framework:** NestJS (Node.js + TypeScript)
 - **Database:** PostgreSQL
 - **ORM:** TypeORM
-- **Blockchain:** Stellar SDK (`@stellar/stellar-sdk` pinned to exact version `14.6.1` for reproducibility) + Soroban RPC
+- **Blockchain:** Stellar SDK (`@stellar/stellar-sdk` pinned to exact version `17.2.1` for reproducibility) + Soroban RPC
 - **API:** REST api
 
 ### Stellar SDK Version
 
-`@stellar/stellar-sdk` is pinned to an **exact version** (`14.6.1`) in `package.json` — no caret or tilde range. Do not "fix" this into `^14.6.1` (issue #446, originally pinned in #213):
+`@stellar/stellar-sdk` is pinned to an **exact version** (`17.2.1`) in `package.json` — no caret or tilde range. Do not "fix" this into `^17.2.1` (issue #446, originally pinned in #213):
 
 - The SDK exposes raw Stellar XDR and Soroban ScVal types. A minor or patch bump can change serialization behaviour — transaction building, `Address.toScVal().toXDR()` output, the sweep-authorization message preimage — and break contract calls in ways that only show up against a live network, not in unit tests.
 - An exact pin makes the dependency tree reproducible across developer machines and CI without relying on the lockfile being regenerated in lockstep with `package.json`.
-- A caret range does not just risk drift, it _hides_ it: `^14.6.1` silently admits `14.9.0`, so a routine `npm install` can change the bytes this service signs and submits without any commit touching the version.
+- A caret range does not just risk drift, it _hides_ it: `^17.2.1` silently admits `17.9.0`, so a routine `npm install` can change the bytes this service signs and submits without any commit touching the version.
 
 **Upgrade process** (manual, by hand — nothing upgrades the pin for you):
 

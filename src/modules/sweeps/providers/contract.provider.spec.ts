@@ -20,6 +20,7 @@ import {
 import { ContractAuthResult } from '../interfaces/contract-auth-result.interface.js';
 import { AuthorizeSweepParams } from '../interfaces/authorize-sweep-params.interface.js';
 import { SweepSignerUtil } from '../../../common/crypto/sweep-signer.util.js';
+import { KMSClient, SignCommand } from '@aws-sdk/client-kms';
 
 // Mock the Stellar SDK
 const mockServer = {
@@ -44,9 +45,24 @@ const mockAddress = {
   toScVal: jest.fn<xdr.ScVal, []>(),
 };
 
+// Fake KMS client for the #823 signer-selection tests. Referenced only from
+// lazily-invoked jest.fn implementations, so it is initialized before use.
+const mockKmsClient = { send: jest.fn() };
+
+jest.mock('@aws-sdk/client-kms', () => ({
+  KMSClient: jest.fn(() => mockKmsClient),
+  GetPublicKeyCommand: jest.fn((input: unknown) => ({ input })),
+  SignCommand: jest.fn((input: unknown) => ({ input })),
+}));
+
 jest.mock('../../../common/crypto/sweep-signer.util.js', () => ({
   SweepSignerUtil: {
     sign: jest.fn(() => Buffer.alloc(64)), // 64-byte dummy signature
+    // #823: generateAuthSignature now builds the digest and signs it through
+    // the SweepSigner; these are the pieces it uses.
+    signMessage: jest.fn(() => Buffer.alloc(64)),
+    buildMessage: jest.fn(() => Buffer.alloc(32)),
+    publicKeyFromSeed: jest.fn(() => 'GMOCKEDSWEEPPUBLICKEY'),
   },
 }));
 
@@ -122,8 +138,10 @@ describe('ContractProvider', () => {
       'CDUMMYCONTRACTID123456789ABCDEFGHIJKLMNOPQRSTUV',
     'stellar.sorobanRpcUrl': 'https://soroban-testnet.stellar.org',
     'stellar.network': 'testnet',
+    // A real 64-hex-char seed: #823 constructs an EnvSeedSweepSigner at
+    // startup, which validates the seed format.
     'stellar.sweepSigningKeySeed':
-      'SDUMMYSEEDFORTESTING1234567890ABCDEFGHIJKLMNOPQRSTUV',
+      '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
     'stellar.contracts.sweepController':
       'CDUMMYSWEEPCONTROLLER123456789ABCDEFGHIJKLMNOP',
     // Deliberately not '0.1.0': proves the version is read from config and
@@ -131,9 +149,15 @@ describe('ContractProvider', () => {
     'stellar.contracts.ephemeralAccountVersion': '1.2.3',
   };
 
+  // Per-test config overrides, consulted before mockConfig.
+  const configOverrides: Record<string, string> = {};
+
   beforeEach(async () => {
     // Clear all mock calls and instances
     jest.clearAllMocks();
+    for (const key of Object.keys(configOverrides)) {
+      delete configOverrides[key];
+    }
 
     // Suppress console errors during tests
     jest.spyOn(console, 'error').mockImplementation(() => {});
@@ -149,7 +173,7 @@ describe('ContractProvider', () => {
 
     mockOperation = {
       type: 'invokeHostFunction',
-    } as Operation;
+    };
 
     mockTransaction = {
       hash: jest.fn(() => Buffer.from('mock-tx-hash')),
@@ -186,10 +210,14 @@ describe('ContractProvider', () => {
           provide: ConfigService,
           useValue: {
             get: jest.fn(
-              (key: string) => mockConfig[key as keyof typeof mockConfig],
+              (key: string) =>
+                configOverrides[key] ??
+                mockConfig[key as keyof typeof mockConfig],
             ),
             getOrThrow: jest.fn((key: string) => {
-              const value = mockConfig[key as keyof typeof mockConfig];
+              const value =
+                configOverrides[key] ??
+                mockConfig[key as keyof typeof mockConfig];
               if (!value) {
                 throw new Error(`Configuration key not found: ${key}`);
               }
@@ -202,6 +230,10 @@ describe('ContractProvider', () => {
 
     provider = module.get<ContractProvider>(ContractProvider);
     configService = module.get<ConfigService>(ConfigService);
+
+    // #823: signer selection happens at startup; every test signs through
+    // the signer onModuleInit() built.
+    await provider.onModuleInit();
   });
 
   afterEach(() => {
@@ -264,6 +296,7 @@ describe('ContractProvider', () => {
 
       const mainnetProvider =
         mainnetModule.get<ContractProvider>(ContractProvider);
+      await mainnetProvider.onModuleInit();
       await mainnetProvider.authorizeSweep(validParams);
 
       expect(TransactionBuilder).toHaveBeenCalledWith(
@@ -327,6 +360,7 @@ describe('ContractProvider', () => {
       const providerWithoutSharedId =
         moduleWithoutSharedId.get<ContractProvider>(ContractProvider);
 
+      await providerWithoutSharedId.onModuleInit();
       await providerWithoutSharedId.authorizeSweep(validParams);
 
       expect(Contract).toHaveBeenCalledWith(validParams.contractId);
@@ -997,47 +1031,57 @@ describe('ContractProvider', () => {
     });
 
     it('should generate different signatures for different nonces', async () => {
-      (SweepSignerUtil.sign as jest.Mock)
+      (SweepSignerUtil.signMessage as jest.Mock)
         .mockReturnValueOnce(Buffer.alloc(64, 1))
         .mockReturnValueOnce(Buffer.alloc(64, 2));
 
       await provider.authorizeSweep({ ...validParams, nonce: 0n });
       await provider.authorizeSweep({ ...validParams, nonce: 1n });
 
-      expect(SweepSignerUtil.sign).toHaveBeenNthCalledWith(
+      expect(SweepSignerUtil.buildMessage).toHaveBeenNthCalledWith(
         1,
         validParams.destinationAddress,
         0n,
         expect.any(String),
-        expect.any(String),
       );
-      expect(SweepSignerUtil.sign).toHaveBeenNthCalledWith(
+      expect(SweepSignerUtil.buildMessage).toHaveBeenNthCalledWith(
         2,
         validParams.destinationAddress,
         1n,
         expect.any(String),
-        expect.any(String),
       );
     });
 
-    it('should sign the nonce it is given, never an implicit 0n (#812)', () => {
+    it('should sign the nonce it is given, never an implicit 0n (#812)', async () => {
       // #812 regression guard. `generateAuthSignature` used to default the
       // nonce to `0n`, which is correct only for the first sweep ever executed
       // by a controller; every later sweep was rejected on-chain.
-      provider.generateAuthSignature({ ...validParams, nonce: 12n });
+      await provider.generateAuthSignature({ ...validParams, nonce: 12n });
 
-      expect(SweepSignerUtil.sign).toHaveBeenCalledWith(
+      expect(SweepSignerUtil.buildMessage).toHaveBeenCalledWith(
         validParams.destinationAddress,
         12n,
         mockConfig['stellar.contracts.sweepController'],
-        mockConfig['stellar.sweepSigningKeySeed'],
       );
-      expect(SweepSignerUtil.sign).not.toHaveBeenCalledWith(
+      expect(SweepSignerUtil.buildMessage).not.toHaveBeenCalledWith(
         validParams.destinationAddress,
         0n,
         expect.anything(),
-        expect.anything(),
       );
+    });
+
+    it('should sign the message through the selected signer (#823)', async () => {
+      const message = Buffer.alloc(32, 4);
+      (SweepSignerUtil.buildMessage as jest.Mock).mockReturnValueOnce(message);
+
+      const signature = await provider.generateAuthSignature(validParams);
+
+      // The env-seed signer signs the exact digest buildMessage produced.
+      expect(SweepSignerUtil.signMessage).toHaveBeenCalledWith(
+        message,
+        mockConfig['stellar.sweepSigningKeySeed'],
+      );
+      expect(signature).toEqual(Buffer.alloc(64));
     });
 
     it('should pass different destination addresses to SweepSignerUtil', async () => {
@@ -1047,17 +1091,15 @@ describe('ContractProvider', () => {
         destinationAddress: 'GD5J...XRNX',
       });
 
-      expect(SweepSignerUtil.sign).toHaveBeenNthCalledWith(
+      expect(SweepSignerUtil.buildMessage).toHaveBeenNthCalledWith(
         1,
         validParams.destinationAddress,
         expect.anything(),
         expect.anything(),
-        expect.anything(),
       );
-      expect(SweepSignerUtil.sign).toHaveBeenNthCalledWith(
+      expect(SweepSignerUtil.buildMessage).toHaveBeenNthCalledWith(
         2,
         'GD5J...XRNX',
-        expect.anything(),
         expect.anything(),
         expect.anything(),
       );
@@ -1108,7 +1150,7 @@ describe('ContractProvider', () => {
 
       for (const testCase of testCases) {
         const message = `${testCase.ephemeralPublicKey}:${testCase.destinationAddress}`;
-        const sigHash = hash(Buffer.from(message)).toString('hex');
+        const sigHash = Buffer.from(hash(Buffer.from(message))).toString('hex');
         const inputKey = `${testCase.ephemeralPublicKey}:${testCase.destinationAddress}`;
 
         // Verify no collision with previous signatures
@@ -1391,7 +1433,9 @@ describe('ContractProvider', () => {
 
       // Manually compute expected hash
       const message = `${validParams.ephemeralPublicKey}:${validParams.destinationAddress}:${timestamp}`;
-      const expectedHash = hash(Buffer.from(message)).toString('hex');
+      const expectedHash = Buffer.from(hash(Buffer.from(message))).toString(
+        'hex',
+      );
 
       expect(result).toBe(expectedHash);
     });
@@ -1715,10 +1759,10 @@ describe('ContractProvider', () => {
       }
     });
 
-    it('refuses to sign when NODE_ENV is production', () => {
+    it('refuses to sign when NODE_ENV is production', async () => {
       process.env.NODE_ENV = 'production';
 
-      expect(() => provider.generateAuthSignature(validParams)).toThrow(
+      await expect(provider.generateAuthSignature(validParams)).rejects.toThrow(
         /Refusing to sign sweep authorizations/,
       );
     });
@@ -1737,17 +1781,120 @@ describe('ContractProvider', () => {
 
     it.each(['development', 'test', 'staging'])(
       'allows signing when NODE_ENV is %p',
-      (nodeEnv) => {
+      async (nodeEnv) => {
         process.env.NODE_ENV = nodeEnv;
 
-        expect(() => provider.generateAuthSignature(validParams)).not.toThrow();
+        await expect(
+          provider.generateAuthSignature(validParams),
+        ).resolves.toBeInstanceOf(Buffer);
       },
     );
 
-    it('allows signing when NODE_ENV is unset', () => {
+    it('allows signing when NODE_ENV is unset', async () => {
       delete process.env.NODE_ENV;
 
-      expect(() => provider.generateAuthSignature(validParams)).not.toThrow();
+      await expect(
+        provider.generateAuthSignature(validParams),
+      ).resolves.toBeInstanceOf(Buffer);
+    });
+  });
+
+  /**
+   * SECTION: Sweep signer selection (#823)
+   *
+   * The provider builds its SweepSigner once, at startup, from config.
+   * These tests cover env-seed vs KMS selection, the production fail-fast,
+   * and the authorized-signer mismatch check.
+   */
+  describe('Sweep signer selection (#823)', () => {
+    const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
+    const KMS_KEY_ID =
+      'arn:aws:kms:us-east-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab';
+
+    /** 12-byte Ed25519 SPKI DER header + 32-byte raw key = KMS's 44 bytes. */
+    const ed25519Spki = () =>
+      Buffer.concat([
+        Buffer.from('302a300506032b6570032100', 'hex'),
+        Buffer.alloc(32, 9),
+      ]);
+
+    afterEach(() => {
+      if (ORIGINAL_NODE_ENV === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = ORIGINAL_NODE_ENV;
+      }
+    });
+
+    it('signs through the env-seed signer by default', async () => {
+      await provider.generateAuthSignature(validParams);
+
+      expect(SweepSignerUtil.buildMessage).toHaveBeenCalledWith(
+        validParams.destinationAddress,
+        validParams.nonce,
+        mockConfig['stellar.contracts.sweepController'],
+      );
+      expect(SweepSignerUtil.signMessage).toHaveBeenCalledWith(
+        Buffer.alloc(32),
+        mockConfig['stellar.sweepSigningKeySeed'],
+      );
+    });
+
+    it('selects the KMS signer when sweepSignerProvider is kms', async () => {
+      configOverrides['stellar.sweepSignerProvider'] = 'kms';
+      configOverrides['stellar.sweepKmsKeyId'] = KMS_KEY_ID;
+      mockKmsClient.send
+        .mockResolvedValueOnce({ PublicKey: ed25519Spki() })
+        .mockResolvedValueOnce({ Signature: Buffer.alloc(64, 7) });
+
+      await provider.onModuleInit();
+      const signature = await provider.generateAuthSignature(validParams);
+
+      expect(KMSClient).toHaveBeenCalledWith({ region: undefined });
+      expect(SignCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          KeyId: KMS_KEY_ID,
+          Message: Buffer.alloc(32),
+          MessageType: 'RAW',
+          SigningAlgorithm: 'ED25519_SHA_512',
+        }),
+      );
+      expect(signature).toEqual(Buffer.alloc(64, 7));
+      // The env seed was not used at all.
+      expect(SweepSignerUtil.signMessage).not.toHaveBeenCalled();
+    });
+
+    it('fails at startup in production with only the env-seed signer', async () => {
+      process.env.NODE_ENV = 'production';
+
+      await expect(provider.onModuleInit()).rejects.toThrow(
+        /Refusing to sign sweep authorizations/,
+      );
+    });
+
+    it('fails at startup for an unknown signer provider', async () => {
+      configOverrides['stellar.sweepSignerProvider'] = 'hsm';
+
+      await expect(provider.onModuleInit()).rejects.toThrow(
+        /Unknown stellar\.sweepSignerProvider "hsm"/,
+      );
+    });
+
+    it('fails at startup when the signer public key does not match the configured authorized signer', async () => {
+      configOverrides['stellar.sweepAuthorizedSigner'] =
+        'GBADKEYNOTMINEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+
+      await expect(provider.onModuleInit()).rejects.toThrow(
+        /does not match the configured authorized signer/,
+      );
+    });
+
+    it('starts when the signer public key matches the configured authorized signer', async () => {
+      // publicKeyFromSeed is mocked to a fixed value; set the override to it.
+      configOverrides['stellar.sweepAuthorizedSigner'] =
+        'GMOCKEDSWEEPPUBLICKEY';
+
+      await expect(provider.onModuleInit()).resolves.toBeUndefined();
     });
   });
 });

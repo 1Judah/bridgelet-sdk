@@ -26,8 +26,16 @@ export class ClaimLookupProvider {
     // used to bypass the soft-delete on those paths.
     //
     // Verified for #703 (duplicate of the already-resolved #642, fixed in
-    // PR #774): the claimTokenHash lookup is served by the
-    // IDX_accounts_claimTokenHash index added in AddHighTrafficIndexes.
+    // PR #774) and re-verified for #764: this method looks the claim up by
+    // primary key (`claims.id` -> PK_claims) and follows the `account`
+    // relation by primary key (`accounts.id` -> PK_accounts), so neither side
+    // of the query can fall back to a sequential scan. Note that the
+    // `claimTokenHash` index (`IDX_accounts_claimTokenHash`, from
+    // CreateAccountsTable) serves the redemption/verification lookups in
+    // `claim-redemption.provider.ts` and `token-verification.provider.ts` --
+    // not this query, which joins on `accountId` and never touches
+    // `claimTokenHash`. Real-Postgres plan assertions for all three shapes
+    // live in `test/claim-lookup-index.e2e-spec.ts`.
     const claim = await this.claimsRepository.findOne({
       where: { id },
       relations: ['account'],

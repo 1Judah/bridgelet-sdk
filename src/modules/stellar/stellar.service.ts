@@ -568,24 +568,33 @@ export class StellarService {
       throw new Error(`get_info simulation failed: ${simResult.error}`);
     }
 
-    // Parse the returned ScVal - shape mirrors AccountInfo struct in bridgelet-core
+    // Parse the returned ScVal - shape mirrors AccountInfo struct in bridgelet-core.
+    // SDK v17: ScVal is a variant union narrowed by `.type`, arm payload is a
+    // plain property (the v14 `.switch()`/`.map()` accessors no longer exist).
     const returnVal = simResult.result?.retval;
     if (!returnVal)
       throw new Error(`get_info returned no value for ${contractId}`);
 
-    const mapEntries = returnVal.map();
-    if (!mapEntries) {
+    if (returnVal.type !== 'scvMap' || !returnVal.map) {
       throw new Error(
         `get_info returned unexpected ScVal type for ${contractId}`,
       );
     }
 
+    const mapEntries = returnVal.map;
     const fields = mapEntries.map((entry) => ({
-      key: entry.key().sym().toString(),
-      val: entry.val(),
+      key: entry.key.type === 'scvSymbol' ? entry.key.value : '',
+      val: entry.val,
     }));
 
     const get = (key: string) => fields.find((f) => f.key === key)?.val;
+
+    // Arm-narrowed field reads: a non-matching arm yields undefined so the
+    // `?? fallback` below applies, matching the previous `?.u32() ?? x` chain.
+    const asU32 = (val: ReturnType<typeof get>) =>
+      val?.type === 'scvU32' ? val.u32 : undefined;
+    const asBool = (val: ReturnType<typeof get>) =>
+      val?.type === 'scvBool' ? val.b : undefined;
 
     const recoveryVal = get('recovery_address');
     if (!recoveryVal) {
@@ -595,10 +604,10 @@ export class StellarService {
     }
 
     return {
-      status: get('status')?.u32()?.toString() ?? 'unknown',
-      expiry_ledger: get('expiry_ledger')?.u32() ?? 0,
-      payment_received: get('payment_received')?.b() ?? false,
-      payment_count: get('payment_count')?.u32() ?? 0,
+      status: asU32(get('status'))?.toString() ?? 'unknown',
+      expiry_ledger: asU32(get('expiry_ledger')) ?? 0,
+      payment_received: asBool(get('payment_received')) ?? false,
+      payment_count: asU32(get('payment_count')) ?? 0,
       recovery_address: StellarSdk.Address.fromScVal(recoveryVal).toString(),
     };
   }
@@ -647,20 +656,19 @@ export class StellarService {
       );
     }
 
-    // The contract returns u64 (Rust `u64`), which the SDK surfaces as
-    // `ScVal::U64`.
-    if (returnVal.switch().name !== 'scvU64') {
+    // The contract returns u64 (Rust `u64`), which SDK v17 surfaces as a
+    // ScValU64 variant whose `.u64` payload is a real bigint.
+    if (returnVal.type !== 'scvU64') {
       throw new Error(
         `get_nonce returned unexpected ScVal type for ` +
-          `${sweepControllerContractId}: ${returnVal.switch().name}`,
+          `${sweepControllerContractId}: ${returnVal.type}`,
       );
     }
 
-    // `ScVal::u64()` returns a js-xdr `UnsignedHyper` wrapper, not a bigint.
-    // Convert via its decimal string: `SweepSignerUtil.buildMessage` feeds the
-    // nonce to `Buffer.writeBigUInt64BE`, which throws a TypeError on anything
-    // that is not a real bigint.
-    return BigInt(returnVal.u64().toString());
+    // Convert via the decimal string form: `SweepSignerUtil.buildMessage`
+    // feeds the nonce to `Buffer.writeBigUInt64BE`, which throws a TypeError
+    // on anything that is not a real bigint.
+    return BigInt(returnVal.u64.toString());
   }
 
   /**

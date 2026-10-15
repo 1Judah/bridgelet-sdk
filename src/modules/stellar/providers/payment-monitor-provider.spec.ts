@@ -16,6 +16,9 @@ const makeAccount = (overrides: Partial<Account> = {}): Account =>
     id: 'acc-uuid-1',
     publicKey: 'GPUBKEY1234',
     status: AccountStatus.PENDING_PAYMENT,
+    // #812: payments are recorded against the per-account contract instance,
+    // so the fixture models the column the provider now reads.
+    contractId: 'CONTRACT123',
     secretKeyEncrypted: 'enc',
     fundingSource: 'GFUNDING',
     amount: '100',
@@ -99,6 +102,9 @@ describe('PaymentMonitorProvider', () => {
     >;
     find: jest.MockedFunction<() => Promise<Account[]>>;
   };
+  let configMock: {
+    getOrThrow: jest.Mock<(key: string) => string | undefined>;
+  };
 
   beforeEach(async () => {
     capturedOnMessage = null;
@@ -121,16 +127,13 @@ describe('PaymentMonitorProvider', () => {
         .mockResolvedValue(undefined),
     };
 
-    const configMock = {
-      getOrThrow: jest.fn((key: string) => {
-        const map: Record<string, string> = {
-          'stellar.horizonUrl': 'https://horizon-testnet.stellar.org',
-          'stellar.ephemeralContractId': 'CONTRACT123',
-          'stellar.fundingSecret': 'SFUNDING_SECRET',
-          'stellar.network': 'testnet',
-        };
-        return map[key];
-      }),
+    const configMap: Record<string, string> = {
+      'stellar.horizonUrl': 'https://horizon-testnet.stellar.org',
+      'stellar.fundingSecret': 'SFUNDING_SECRET',
+      'stellar.network': 'testnet',
+    };
+    configMock = {
+      getOrThrow: jest.fn((key: string) => configMap[key]),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -258,6 +261,74 @@ describe('PaymentMonitorProvider', () => {
       await new Promise(setImmediate);
 
       expect(stellarService.recordPayment).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Per-account contract ID (#812)
+  // -------------------------------------------------------------------------
+
+  describe('per-account contract ID (#812)', () => {
+    it('records payments against the account row contract ID, not config', async () => {
+      service.watch(makeAccount({ contractId: 'CACCOUNT999' }));
+      capturedOnMessage!(makePaymentRecord());
+      await new Promise(setImmediate);
+
+      expect(stellarService.recordPayment).toHaveBeenCalledWith(
+        expect.objectContaining({ contractId: 'CACCOUNT999' }),
+      );
+      // The old code read a phantom `stellar.ephemeralContractId` key that
+      // exists in no env-validation schema or .env.example.
+      expect(configMock.getOrThrow).not.toHaveBeenCalledWith(
+        'stellar.ephemeralContractId',
+      );
+      expect(configMock.getOrThrow).not.toHaveBeenCalledWith(
+        'stellar.contracts.ephemeralAccount',
+      );
+    });
+
+    it('gives a clear error and skips recordPayment when contractId is null', async () => {
+      const providerLogger = (
+        service as unknown as { logger: { error: (msg: string) => void } }
+      ).logger;
+      const errorSpy = jest
+        .spyOn(providerLogger, 'error')
+        .mockImplementation(() => undefined);
+
+      service.watch(makeAccount({ contractId: null }));
+      capturedOnMessage!(makePaymentRecord());
+      await new Promise(setImmediate);
+
+      expect(stellarService.recordPayment).not.toHaveBeenCalled();
+      expect(accountsRepo.update).not.toHaveBeenCalled();
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'Cannot record payment for account acc-uuid-1: no ' +
+            'EphemeralAccount contract ID is recorded for it.',
+        ),
+      );
+    });
+
+    it('catches handler rejections so they cannot become unhandled', async () => {
+      const providerLogger = (
+        service as unknown as { logger: { error: (msg: string) => void } }
+      ).logger;
+      const errorSpy = jest
+        .spyOn(providerLogger, 'error')
+        .mockImplementation(() => undefined);
+
+      // recordPayment itself is try/caught inside the handler, but the DB
+      // status write is not — that rejection used to escape the `void`.
+      accountsRepo.update.mockRejectedValueOnce(new Error('db down'));
+      service.watch(makeAccount());
+      capturedOnMessage!(makePaymentRecord());
+      await new Promise(setImmediate);
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'Unhandled payment-event error for account acc-uuid-1: db down',
+        ),
+      );
     });
   });
 

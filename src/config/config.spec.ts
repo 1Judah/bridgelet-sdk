@@ -199,8 +199,48 @@ describe('validateEnv - CLAIM_BASE_URL', () => {
         ...baseValidEnv,
         NODE_ENV: 'production',
         CLAIM_BASE_URL: 'https://claim.bridgelet.io',
+        // #823: production requires the KMS sweep signer.
+        STELLAR_SWEEP_SIGNER_PROVIDER: 'kms',
+        STELLAR_SWEEP_KMS_KEY_ID:
+          'arn:aws:kms:us-east-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab',
       }),
     ).not.toThrow();
+  });
+
+  it('refuses to start when NODE_ENV=production and the sweep signer is env-seed (#823)', async () => {
+    const { validateEnv } = await import('./env-validation.js');
+    expect(() =>
+      validateEnv({
+        ...baseValidEnv,
+        NODE_ENV: 'production',
+        CLAIM_BASE_URL: 'https://claim.bridgelet.io',
+        STELLAR_SWEEP_SIGNER_PROVIDER: 'env-seed',
+      }),
+    ).toThrow('STELLAR_SWEEP_SIGNER_PROVIDER must be "kms" in production');
+  });
+
+  it('refuses to start when NODE_ENV=production and the sweep signer is kms without a key ID (#823)', async () => {
+    const { validateEnv } = await import('./env-validation.js');
+    expect(() =>
+      validateEnv({
+        ...baseValidEnv,
+        NODE_ENV: 'production',
+        CLAIM_BASE_URL: 'https://claim.bridgelet.io',
+        STELLAR_SWEEP_SIGNER_PROVIDER: 'kms',
+      }),
+    ).toThrow(
+      'STELLAR_SWEEP_KMS_KEY_ID is required when STELLAR_SWEEP_SIGNER_PROVIDER is "kms"',
+    );
+  });
+
+  it('rejects an unknown STELLAR_SWEEP_SIGNER_PROVIDER value (#823)', async () => {
+    const { validateEnv } = await import('./env-validation.js');
+    expect(() =>
+      validateEnv({
+        ...baseValidEnv,
+        STELLAR_SWEEP_SIGNER_PROVIDER: 'hsm',
+      }),
+    ).toThrow('STELLAR_SWEEP_SIGNER_PROVIDER must be "env-seed" or "kms"');
   });
 
   it('starts normally without CLAIM_BASE_URL when NODE_ENV is development or test', async () => {

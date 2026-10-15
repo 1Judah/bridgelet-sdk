@@ -46,6 +46,24 @@ function makeSorobanServer() {
   };
 }
 
+// sdk 17: TransactionEnvelope/OperationBody/HostFunction are discriminated
+// unions accessed via properties, not the removed method-style accessors.
+function v1Operations(tx: StellarSdk.Transaction) {
+  const envelope = tx.toEnvelope();
+  if (envelope.type !== 'envelopeTypeTx') {
+    throw new Error(`expected envelopeTypeTx, got ${envelope.type}`);
+  }
+  return envelope.v1.tx.operations;
+}
+
+function invokeHostFunctionOp(tx: StellarSdk.Transaction) {
+  const body = v1Operations(tx)[0].body;
+  if (body.type !== 'invokeHostFunction') {
+    throw new Error(`expected invokeHostFunction, got ${body.type}`);
+  }
+  return body.invokeHostFunctionOp.hostFunction;
+}
+
 // ── Shared fixtures ───────────────────────────────────────────────────────────
 
 const FUNDING_SECRET =
@@ -310,26 +328,37 @@ describe('StellarService', () => {
 
       const deployTx = sorobanServer.prepareTransaction.mock
         .calls[0][0] as StellarSdk.Transaction;
-      const deployOp = deployTx.toEnvelope().v1().tx().operations()[0];
-      expect(deployOp.body().switch().name).toBe('invokeHostFunction');
+      const deployOp = v1Operations(deployTx)[0];
+      expect(deployOp.body.type).toBe('invokeHostFunction');
+      if (deployOp.body.type !== 'invokeHostFunction') {
+        throw new Error('expected invokeHostFunction operation body');
+      }
 
-      const hostFn = deployOp.body().invokeHostFunctionOp().hostFunction();
-      expect(hostFn.switch().name).toBe('hostFunctionTypeCreateContractV2');
+      const hostFn = deployOp.body.invokeHostFunctionOp.hostFunction;
+      expect(hostFn.type).toBe('hostFunctionTypeCreateContractV2');
+      if (hostFn.type !== 'hostFunctionTypeCreateContractV2') {
+        throw new Error('expected hostFunctionTypeCreateContractV2');
+      }
 
-      const createArgs = hostFn.createContractV2();
-      expect(createArgs.executable().switch().name).toBe(
-        'contractExecutableWasm',
-      );
-      expect(Buffer.from(createArgs.executable().wasmHash())).toEqual(
+      const createArgs = hostFn.createContractV2;
+      expect(createArgs.executable.type).toBe('contractExecutableWasm');
+      if (createArgs.executable.type !== 'contractExecutableWasm') {
+        throw new Error('expected contractExecutableWasm');
+      }
+      expect(Buffer.from(createArgs.executable.wasmHash.toBytes())).toEqual(
         Buffer.from(WASM_HASH_HEX, 'hex'),
       );
 
-      const preimage = createArgs.contractIdPreimage();
-      expect(preimage.switch().name).toBe('contractIdPreimageFromAddress');
-      const fromAddress = preimage.fromAddress();
-      expect(fromAddress.salt()).toHaveLength(32);
+      const preimage = createArgs.contractIdPreimage;
+      expect(preimage.type).toBe('contractIdPreimageFromAddress');
+      if (preimage.type !== 'contractIdPreimageFromAddress') {
+        throw new Error('expected contractIdPreimageFromAddress');
+      }
+      expect(preimage.fromAddress.salt.toBytes()).toHaveLength(32);
       expect(
-        StellarSdk.Address.fromScAddress(fromAddress.address()).toString(),
+        StellarSdk.Address.fromScAddress(
+          preimage.fromAddress.address,
+        ).toString(),
       ).toBe(FUNDING_KEYPAIR.publicKey());
     });
 
@@ -340,22 +369,16 @@ describe('StellarService', () => {
 
       const initTx = sorobanServer.prepareTransaction.mock
         .calls[1][0] as StellarSdk.Transaction;
-      const invokeOp = initTx
-        .toEnvelope()
-        .v1()
-        .tx()
-        .operations()[0]
-        .body()
-        .invokeHostFunctionOp();
-      const invokeArgs = invokeOp.hostFunction().invokeContract();
+      const hostFn = invokeHostFunctionOp(initTx);
+      expect(hostFn.type).toBe('hostFunctionTypeInvokeContract');
+      if (hostFn.type !== 'hostFunctionTypeInvokeContract') {
+        throw new Error('expected hostFunctionTypeInvokeContract');
+      }
+      const invokeArgs = hostFn.invokeContract;
       expect(
-        StellarSdk.Address.fromScAddress(
-          invokeArgs.contractAddress(),
-        ).toString(),
+        StellarSdk.Address.fromScAddress(invokeArgs.contractAddress).toString(),
       ).toBe(DEPLOYED_CONTRACT_ID);
-      expect(Buffer.from(invokeArgs.functionName()).toString()).toBe(
-        'initialize',
-      );
+      expect(invokeArgs.functionName.toString()).toBe('initialize');
     });
 
     it('does not read the shared ephemeral-account contract ID', async () => {
@@ -798,30 +821,24 @@ describe('StellarService', () => {
     it('parses a valid simulation result with all fields present', async () => {
       jest.spyOn(SorobanRpc.Api, 'isSimulationError').mockReturnValue(false);
 
-      // Build mock ScVal map entries for the on-chain AccountInfo struct
+      // The simulation returns an SCMap mirroring the on-chain AccountInfo struct.
       const recoveryScVal = StellarSdk.Address.fromString(
         FUNDING_KEYPAIR.publicKey(),
       ).toScVal();
 
-      const makeEntry = (key: string, val: any) => ({
-        key: () => ({ sym: () => ({ toString: () => key }) }),
-        val: () => val,
-      });
+      const entry = (key: string, val: StellarSdk.xdr.ScVal) =>
+        new StellarSdk.xdr.ScMapEntry({
+          key: StellarSdk.xdr.ScVal.scvSymbol(key),
+          val,
+        });
 
-      const statusVal = { u32: () => 1 };
-      const expiryVal = { u32: () => 5000 };
-      const paymentReceivedVal = { b: () => true };
-      const paymentCountVal = { u32: () => 2 };
-
-      const mockRetval = {
-        map: () => [
-          makeEntry('status', statusVal),
-          makeEntry('expiry_ledger', expiryVal),
-          makeEntry('payment_received', paymentReceivedVal),
-          makeEntry('payment_count', paymentCountVal),
-          makeEntry('recovery_address', recoveryScVal),
-        ],
-      };
+      const mockRetval = StellarSdk.xdr.ScVal.scvMap([
+        entry('status', StellarSdk.xdr.ScVal.scvU32(1)),
+        entry('expiry_ledger', StellarSdk.xdr.ScVal.scvU32(5000)),
+        entry('payment_received', StellarSdk.xdr.ScVal.scvBool(true)),
+        entry('payment_count', StellarSdk.xdr.ScVal.scvU32(2)),
+        entry('recovery_address', recoveryScVal),
+      ]);
 
       sorobanServer.simulateTransaction.mockResolvedValue({
         result: { retval: mockRetval },
@@ -838,14 +855,12 @@ describe('StellarService', () => {
     it('throws when recovery_address field is missing', async () => {
       jest.spyOn(SorobanRpc.Api, 'isSimulationError').mockReturnValue(false);
 
-      const makeEntry = (key: string, val: any) => ({
-        key: () => ({ sym: () => ({ toString: () => key }) }),
-        val: () => val,
-      });
-
-      const mockRetval = {
-        map: () => [makeEntry('status', { u32: () => 1 })],
-      };
+      const mockRetval = StellarSdk.xdr.ScVal.scvMap([
+        new StellarSdk.xdr.ScMapEntry({
+          key: StellarSdk.xdr.ScVal.scvSymbol('status'),
+          val: StellarSdk.xdr.ScVal.scvU32(1),
+        }),
+      ]);
 
       sorobanServer.simulateTransaction.mockResolvedValue({
         result: { retval: mockRetval },
@@ -856,11 +871,11 @@ describe('StellarService', () => {
       );
     });
 
-    it('throws when map() returns null (unexpected ScVal type)', async () => {
+    it('throws when the ScVal map payload is null (unexpected ScVal type)', async () => {
       jest.spyOn(SorobanRpc.Api, 'isSimulationError').mockReturnValue(false);
 
       sorobanServer.simulateTransaction.mockResolvedValue({
-        result: { retval: { map: () => null } },
+        result: { retval: StellarSdk.xdr.ScVal.scvMap(null) },
       });
 
       await expect(service.getAccountInfo(CONTRACT_ID)).rejects.toThrow(
@@ -879,17 +894,15 @@ describe('StellarService', () => {
       jest.spyOn(SorobanRpc.Api, 'isSimulationError').mockReturnValue(false);
       sorobanServer.simulateTransaction.mockResolvedValue({
         result: {
-          retval: StellarSdk.xdr.ScVal.scvU64(
-            StellarSdk.xdr.Uint64.fromString('42'),
-          ),
+          retval: StellarSdk.xdr.ScVal.scvU64(42n),
         },
       });
 
       const nonce = await service.getSweepNonce(CONTRACT_ID);
 
       expect(nonce).toBe(42n);
-      // Guards the UnsignedHyper wrapper: buildMessage calls
-      // Buffer.writeBigUInt64BE, which throws on a non-bigint.
+      // buildMessage feeds the nonce to Buffer.writeBigUInt64BE, which
+      // throws on a non-bigint.
       expect(typeof nonce).toBe('bigint');
     });
 
@@ -897,9 +910,7 @@ describe('StellarService', () => {
       jest.spyOn(SorobanRpc.Api, 'isSimulationError').mockReturnValue(false);
       sorobanServer.simulateTransaction.mockResolvedValue({
         result: {
-          retval: StellarSdk.xdr.ScVal.scvU64(
-            StellarSdk.xdr.Uint64.fromString('18446744073709551615'),
-          ),
+          retval: StellarSdk.xdr.ScVal.scvU64(18446744073709551615n),
         },
       });
 
@@ -913,9 +924,7 @@ describe('StellarService', () => {
       jest.spyOn(SorobanRpc.Api, 'isSimulationError').mockReturnValue(false);
       sorobanServer.simulateTransaction.mockResolvedValue({
         result: {
-          retval: StellarSdk.xdr.ScVal.scvU64(
-            StellarSdk.xdr.Uint64.fromString('1'),
-          ),
+          retval: StellarSdk.xdr.ScVal.scvU64(1n),
         },
       });
 
@@ -930,9 +939,7 @@ describe('StellarService', () => {
       jest.spyOn(SorobanRpc.Api, 'isSimulationError').mockReturnValue(false);
       sorobanServer.simulateTransaction.mockResolvedValue({
         result: {
-          retval: StellarSdk.xdr.ScVal.scvU64(
-            StellarSdk.xdr.Uint64.fromString('0'),
-          ),
+          retval: StellarSdk.xdr.ScVal.scvU64(0n),
         },
       });
 
@@ -940,24 +947,16 @@ describe('StellarService', () => {
 
       const tx = sorobanServer.simulateTransaction.mock
         .calls[0][0] as StellarSdk.Transaction;
-      const hostFn = tx
-        .toEnvelope()
-        .v1()
-        .tx()
-        .operations()[0]
-        .body()
-        .invokeHostFunctionOp()
-        .hostFunction();
-      expect(hostFn.switch().name).toBe('hostFunctionTypeInvokeContract');
-      const invokeArgs = hostFn.invokeContract();
+      const hostFn = invokeHostFunctionOp(tx);
+      expect(hostFn.type).toBe('hostFunctionTypeInvokeContract');
+      if (hostFn.type !== 'hostFunctionTypeInvokeContract') {
+        throw new Error('expected hostFunctionTypeInvokeContract');
+      }
+      const invokeArgs = hostFn.invokeContract;
       expect(
-        StellarSdk.Address.fromScAddress(
-          invokeArgs.contractAddress(),
-        ).toString(),
+        StellarSdk.Address.fromScAddress(invokeArgs.contractAddress).toString(),
       ).toBe(CONTRACT_ID);
-      expect(Buffer.from(invokeArgs.functionName()).toString()).toBe(
-        'get_nonce',
-      );
+      expect(invokeArgs.functionName.toString()).toBe('get_nonce');
     });
 
     it('propagates a simulation error instead of returning a stale value', async () => {

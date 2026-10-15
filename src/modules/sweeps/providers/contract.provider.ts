@@ -2,6 +2,7 @@ import {
   Injectable,
   Logger,
   InternalServerErrorException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -18,6 +19,10 @@ import type { AuthorizeSweepParams } from '../interfaces/authorize-sweep-params.
 import type { ContractAuthResult } from '../interfaces/contract-auth-result.interface.js';
 import { SweepSignerUtil } from '../../../common/crypto/sweep-signer.util.js';
 import { SweepSigningGuard } from '../../../common/crypto/sweep-signing-guard.util.js';
+import {
+  createSweepSigner,
+  type SweepSigner,
+} from '../../../common/crypto/sweep-signer.js';
 
 /**
  * Reported by {@link ContractProvider.getContractInfo} when the deployed
@@ -28,11 +33,18 @@ import { SweepSigningGuard } from '../../../common/crypto/sweep-signing-guard.ut
 export const UNKNOWN_CONTRACT_VERSION = 'unknown';
 
 @Injectable()
-export class ContractProvider {
+export class ContractProvider implements OnModuleInit {
   private readonly logger = new Logger(ContractProvider.name);
   private readonly contractVersion: string;
   private readonly sorobanRpcUrl: string;
   private readonly networkPassphrase: string;
+
+  /**
+   * #823: the configured sweep signer (env-seed for development, KMS for
+   * production), created once at startup so a misconfigured deployment fails
+   * before the first claim rather than during it.
+   */
+  private sweepSigner: SweepSigner | null = null;
 
   /**
    * #650: built once per provider, not once per sweep. This provider is
@@ -74,6 +86,32 @@ export class ContractProvider {
   }
 
   /**
+   * #823: select and construct the sweep signer at startup. In production
+   * this must resolve to a production-capable signer (KMS); there is
+   * deliberately no fallback to the env seed, so a missing production
+   * signer fails the app here rather than every claim later.
+   */
+  async onModuleInit(): Promise<void> {
+    this.sweepSigner = await createSweepSigner({
+      provider:
+        this.configService.get<string>('stellar.sweepSignerProvider') ??
+        'env-seed',
+      signingKeySeed: this.configService.get<string>(
+        'stellar.sweepSigningKeySeed',
+      ),
+      kmsKeyId: this.configService.get<string>('stellar.sweepKmsKeyId'),
+      awsRegion: this.configService.get<string>('app.awsRegion'),
+      nodeEnv: process.env.NODE_ENV,
+      authorizedSigner: this.configService.get<string>(
+        'stellar.sweepAuthorizedSigner',
+      ),
+    });
+    this.logger.log(
+      `Sweep signer initialized (public key ${this.sweepSigner.publicKey()})`,
+    );
+  }
+
+  /**
    * Authorize sweep via smart contract
    * Calls the contract's sweep() function to validate authorization
    */
@@ -98,7 +136,7 @@ export class ContractProvider {
       // Generate authorization signature — a real Ed25519 signature (#457).
       // See generateAuthSignature() and the SweepSignerUtil class docs for the
       // exact message format and its cross-language conformance test.
-      const authSignature = this.generateAuthSignature(params);
+      const authSignature = await this.generateAuthSignature(params);
 
       // Build contract invocation transaction
       const account = await server.getAccount(params.ephemeralPublicKey);
@@ -198,17 +236,33 @@ export class ContractProvider {
    * So this SDK side is no longer the weak half: it produces a signature the
    * SweepController will actually accept. The remaining gap is on the
    * `EphemeralAccount` path, and it is not something this repo can close.
+   *
+   * ## #823 — the signing key now lives behind a SweepSigner
+   *
+   * The message digest is still built here (unchanged format, still pinned by
+   * the conformance vectors), but the private key that signs it is held by
+   * the SweepSigner selected at startup in `onModuleInit()`: the env seed in
+   * development, an asymmetric Ed25519 KMS key in production. That is why
+   * this method is now async and why the seed is no longer read here.
    */
-  public generateAuthSignature(params: AuthorizeSweepParams): Buffer {
+  public async generateAuthSignature(
+    params: AuthorizeSweepParams,
+  ): Promise<Buffer> {
     // #457 criterion 3: fail closed rather than let a development/test
     // signing seed be used in a production configuration. Narrow on purpose —
     // see SweepSigningGuard's docs for why this is checked here rather than at
-    // bootstrap, and why an unset NODE_ENV is allowed.
+    // bootstrap, and why an unset NODE_ENV is allowed. Kept even though
+    // createSweepSigner() also refuses the env-seed signer in production:
+    // this catches a NODE_ENV change after boot.
     SweepSigningGuard.assertSigningAllowed(process.env.NODE_ENV);
 
-    const signingKeySeed = this.configService.getOrThrow<string>(
-      'stellar.sweepSigningKeySeed',
-    );
+    if (!this.sweepSigner) {
+      throw new Error(
+        'SweepSigner is not initialized. ContractProvider.onModuleInit() ' +
+          'must run before generateAuthSignature().',
+      );
+    }
+
     const sweepControllerContractId = this.configService.getOrThrow<string>(
       'stellar.contracts.sweepController',
     );
@@ -218,14 +272,13 @@ export class ContractProvider {
     // NOT defaulted here: signing `0n` when the caller forgot to read the real
     // value produced a signature the controller rejects for every sweep after
     // the first one ever executed.
-    const nonce = params.nonce;
-
-    return SweepSignerUtil.sign(
+    const message = SweepSignerUtil.buildMessage(
       params.destinationAddress,
-      nonce,
+      params.nonce,
       sweepControllerContractId,
-      signingKeySeed,
     );
+
+    return this.sweepSigner.sign(message);
   }
 
   /**
@@ -270,7 +323,9 @@ export class ContractProvider {
   ): string {
     const ts = timestamp ?? Date.now();
     const message = `${ephemeralKey}:${destination}:${ts}`;
+    // SDK v17: hash() returns a Uint8Array — Buffer.from(...) restores the
+    // hex-encoding argument (Uint8Array.toString() takes no encoding).
     const hashBuffer = hash(Buffer.from(message));
-    return hashBuffer.toString('hex');
+    return Buffer.from(hashBuffer).toString('hex');
   }
 }
