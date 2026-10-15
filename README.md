@@ -357,7 +357,8 @@ Edit the PR title directly in GitHub:
 
 ## Deployment
 
-See [Deployment Guide](./docs/deployment.md) for production setup.
+See [Deployment Guide](./docs/deployment.md) for production setup, including a
+step-by-step [Render deployment walkthrough](./docs/deployment.md#deploying-on-render-issue-824).
 
 ## Documentation
 

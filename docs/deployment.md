@@ -151,3 +151,78 @@ using this reasoning instead of a specific benchmark:
 
 When a real load-testing setup is added, replace this section with
 the measured concurrency figure and the `max` value it justifies.
+
+## Deploying on Render (issue #824)
+
+This is the shortest path to a running testnet deployment. It assumes a
+Render account and a Stellar funding account.
+
+### 1. Create a managed Postgres instance
+
+1. Render dashboard -> **New +** -> **Postgres**.
+2. Pick a region/plan and create it. Note the **Internal Database URL** for
+   services in the same region (or the **External** one for one-off jobs run
+   from your machine, e.g. the first `npm run migration:run`).
+3. From the connection details, set `DATABASE_HOST`, `DATABASE_PORT`,
+   `DATABASE_NAME`, `DATABASE_USER` and `DATABASE_PASSWORD` on the web service
+   below. `DATABASE_SYNC` must stay `false` outside `NODE_ENV=test`; run
+   migrations explicitly instead.
+
+### 2. Create the web service
+
+1. Render dashboard -> **New +** -> **Web Service**, connect this repository.
+2. Settings:
+   - **Environment:** Node
+   - **Build Command:** `npm ci && npm run build`
+   - **Start Command:** `npm run migration:run && npm run start:prod`
+   - **Health Check Path:** `/health`
+3. Add the environment variables from the table below. Render applies them and
+   the app validates them at startup: `validateEnv()` (`src/config/env-validation.ts`)
+   runs before the Nest app is created, so a bad configuration exits
+   immediately with a single error listing every problem rather than failing
+   later inside a request handler.
+
+### 3. Environment variables
+
+| Variable                                                                                    | Required       | Notes                                                                                                                                 |
+| ------------------------------------------------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`                                                                                  | yes            | `production` for a real deployment, `development` for a testnet demo (see below).                                                     |
+| `PORT`                                                                                      | no             | Render injects this; the app reads it.                                                                                                |
+| `DATABASE_HOST` / `DATABASE_PORT` / `DATABASE_NAME` / `DATABASE_USER` / `DATABASE_PASSWORD` | yes            | From the Postgres instance.                                                                                                           |
+| `DATABASE_SYNC`                                                                             | yes            | Must be `false` outside tests.                                                                                                        |
+| `STELLAR_NETWORK`                                                                           | yes            | `testnet` or `mainnet`.                                                                                                               |
+| `STELLAR_HORIZON_URL`                                                                       | yes            | e.g. `https://horizon-testnet.stellar.org`.                                                                                           |
+| `STELLAR_SOROBAN_RPC_URL`                                                                   | yes            | e.g. `https://soroban-testnet.stellar.org`.                                                                                           |
+| `JWT_SECRET`                                                                                | yes            | Long random string.                                                                                                                   |
+| `ENCRYPTION_KEY`                                                                            | yes            | 64 hex chars.                                                                                                                         |
+| `SWEEP_CONTROLLER_CONTRACT_ID`                                                              | yes (non-test) | Controller that authorizes sweeps. Redeploying it produces a **new ID** that only applies to accounts created afterwards (see below). |
+| `EPHEMERAL_ACCOUNT_WASM_HASH`                                                               | yes (non-test) | 64 hex chars; from `bridgelet-core/deployments/testnet.json`.                                                                         |
+| `CLAIM_BASE_URL`                                                                            | yes (non-test) | Public base URL for claim links, a valid `http`/`https` URL **without a trailing slash**.                                             |
+| `CORS_ORIGINS`                                                                              | production     | Comma-separated allowed origins. **`*` is rejected when `NODE_ENV=production`.**                                                      |
+| `FUNDING_ACCOUNT_SECRET`                                                                    | yes            | Stellar secret funding account creation.                                                                                              |
+| `SWEEP_SIGNING_KEY_SEED`                                                                    | testnet demo   | 64-hex Ed25519 seed. See the sweep-signer notes below.                                                                                |
+
+### 4. `NODE_ENV`: testnet demo vs production
+
+- **Testnet demo:** `NODE_ENV=development`. `CORS_ORIGINS` may be `*`, which
+  makes it easy to poke the API from a browser during a demo. `CLAIM_BASE_URL`,
+  `SWEEP_CONTROLLER_CONTRACT_ID` and `EPHEMERAL_ACCOUNT_WASM_HASH` are still
+  required (they are required for everything except `NODE_ENV=test`).
+- **Production:** `NODE_ENV=production`. `CORS_ORIGINS` must list explicit
+  origins (a wildcard is rejected at startup because the app sends
+  credentials), and the production sweep-signing path must be configured.
+
+> **Production sweep signing is gated.** As of this writing the app refuses to
+> sign sweeps with a raw env seed when `NODE_ENV=production`; see the sweep
+> signer work tracked in the "production sweep signer" pull request. Until a
+> production signer is configured, a `NODE_ENV=production` deployment will not
+> sweep. Use `NODE_ENV=development` for testnet demos.
+
+### 5. Redeploying `SWEEP_CONTROLLER_CONTRACT_ID`
+
+Each ephemeral account is initialized with the controller ID **in effect when
+the account was created** and stores it on-chain as `authorized_controller`.
+Changing `SWEEP_CONTROLLER_CONTRACT_ID` (e.g. after redeploying
+`SweepController`) therefore points only **new** accounts at the new
+controller; existing accounts keep sweeping through the controller they were
+created under. If you need to move old accounts, recreate them.
