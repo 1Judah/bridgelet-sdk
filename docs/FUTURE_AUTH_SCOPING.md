@@ -110,10 +110,3 @@ CREATE TABLE integrators (
 - **Senders created via `metadata`.** `senderAddress` is a first-class column
   now; any integration that was smuggling the wallet address into `metadata`
   should migrate to the column.
-
-## Status and tracking (#758)
-
-This document lives in `docs/` because it is forward-looking architecture, not
-module-local documentation. The accounts-module copy was moved here. Per-sender
-scoping is partly in place: `JwtAuthGuard` already honours `scope: 'sender'`
-tokens (see `jwt-auth.guard.ts`); broader per-integrator scoping remains planned.
