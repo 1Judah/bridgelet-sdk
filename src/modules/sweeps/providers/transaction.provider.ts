@@ -153,17 +153,31 @@ export class TransactionProvider {
       );
 
       // Build account merge transaction
-      const transaction = new TransactionBuilder(sourceAccount, {
+      const transactionBuilder = new TransactionBuilder(sourceAccount, {
         fee: BASE_FEE,
         networkPassphrase: this.networkPassphrase,
-      })
-        .addOperation(
-          Operation.accountMerge({
-            destination: params.destinationAddress,
+      }).setTimeout(30);
+
+      // #827: an issued-asset account holds a trustline, and an AccountMerge
+      // fails while the source still has subentries (trustlines). Remove the
+      // trustline in the same transaction before merging so the reserve can
+      // actually be reclaimed.
+      if (params.asset && params.asset !== 'native' && params.asset !== 'XLM') {
+        transactionBuilder.addOperation(
+          Operation.changeTrust({
+            asset: this.parseAsset(params.asset),
+            limit: '0',
           }),
-        )
-        .setTimeout(30)
-        .build();
+        );
+      }
+
+      transactionBuilder.addOperation(
+        Operation.accountMerge({
+          destination: params.destinationAddress,
+        }),
+      );
+
+      const transaction = transactionBuilder.build();
 
       // Sign with ephemeral account
       transaction.sign(sourceKeypair);

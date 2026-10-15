@@ -37,6 +37,13 @@ export class Account {
   @Index('IDX_accounts_contractId')
   contractId: string | null;
 
+  // #825: wallet address of the sender who created the account, used to scope
+  // GET /accounts and GET /accounts/:id for sender-scoped tokens. Nullable
+  // because accounts created by an admin token may be untagged.
+  @Column({ type: 'varchar', length: 56, nullable: true })
+  @Index('IDX_accounts_senderAddress')
+  senderAddress: string | null;
+
   @Column({ type: 'text' })
   secretKeyEncrypted: string;
 

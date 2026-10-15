@@ -158,6 +158,8 @@ describe('validateEnv - CLAIM_BASE_URL', () => {
     JWT_SECRET: 'test-jwt-secret',
     ENCRYPTION_KEY: 'a'.repeat(64),
     EPHEMERAL_ACCOUNT_WASM_HASH: 'b'.repeat(64),
+    // #824: required outside NODE_ENV=test.
+    SWEEP_CONTROLLER_CONTRACT_ID: `C${'A'.repeat(55)}`,
   };
 
   it('refuses to start when NODE_ENV=production and CLAIM_BASE_URL is missing', async () => {
@@ -243,12 +245,23 @@ describe('validateEnv - CLAIM_BASE_URL', () => {
     ).toThrow('STELLAR_SWEEP_SIGNER_PROVIDER must be "env-seed" or "kms"');
   });
 
-  it('starts normally without CLAIM_BASE_URL when NODE_ENV is development or test', async () => {
+  it('requires CLAIM_BASE_URL outside NODE_ENV=test but not under test (#824)', async () => {
     const { validateEnv } = await import('./env-validation.js');
+
+    // #824: a development deployment that omits CLAIM_BASE_URL used to start
+    // and then hand out links pointing at the production default host.
     expect(() =>
       validateEnv({
         ...baseValidEnv,
         NODE_ENV: 'development',
+      }),
+    ).toThrow('CLAIM_BASE_URL is missing');
+
+    expect(() =>
+      validateEnv({
+        ...baseValidEnv,
+        NODE_ENV: 'development',
+        CLAIM_BASE_URL: 'http://localhost:3000',
       }),
     ).not.toThrow();
 
@@ -256,6 +269,70 @@ describe('validateEnv - CLAIM_BASE_URL', () => {
       validateEnv({
         ...baseValidEnv,
         NODE_ENV: 'test',
+      }),
+    ).not.toThrow();
+  });
+
+  it('requires SWEEP_CONTROLLER_CONTRACT_ID outside NODE_ENV=test (#824)', async () => {
+    const { validateEnv } = await import('./env-validation.js');
+
+    const missing = { ...baseValidEnv };
+    delete missing.SWEEP_CONTROLLER_CONTRACT_ID;
+
+    expect(() =>
+      validateEnv({
+        ...missing,
+        NODE_ENV: 'production',
+        CLAIM_BASE_URL: 'https://claim.bridgelet.io',
+        STELLAR_SWEEP_SIGNER_PROVIDER: 'kms',
+        STELLAR_SWEEP_KMS_KEY_ID:
+          'arn:aws:kms:us-east-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab',
+      }),
+    ).toThrow('SWEEP_CONTROLLER_CONTRACT_ID is missing');
+
+    expect(() =>
+      validateEnv({
+        ...baseValidEnv,
+        NODE_ENV: 'test',
+      }),
+    ).not.toThrow();
+  });
+
+  it('rejects a wildcard CORS_ORIGINS in production (#824)', async () => {
+    const { validateEnv } = await import('./env-validation.js');
+
+    expect(() =>
+      validateEnv({
+        ...baseValidEnv,
+        NODE_ENV: 'production',
+        CLAIM_BASE_URL: 'https://claim.bridgelet.io',
+        STELLAR_SWEEP_SIGNER_PROVIDER: 'kms',
+        STELLAR_SWEEP_KMS_KEY_ID:
+          'arn:aws:kms:us-east-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab',
+        CORS_ORIGINS: '*',
+      }),
+    ).toThrow('CORS_ORIGINS must not be "*" in production');
+
+    // A wildcard is only rejected in production; development still allows it.
+    expect(() =>
+      validateEnv({
+        ...baseValidEnv,
+        NODE_ENV: 'development',
+        CLAIM_BASE_URL: 'http://localhost:3000',
+        CORS_ORIGINS: '*',
+      }),
+    ).not.toThrow();
+
+    // Explicit origins pass in production.
+    expect(() =>
+      validateEnv({
+        ...baseValidEnv,
+        NODE_ENV: 'production',
+        CLAIM_BASE_URL: 'https://claim.bridgelet.io',
+        STELLAR_SWEEP_SIGNER_PROVIDER: 'kms',
+        STELLAR_SWEEP_KMS_KEY_ID:
+          'arn:aws:kms:us-east-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab',
+        CORS_ORIGINS: 'https://app.bridgelet.io',
       }),
     ).not.toThrow();
   });

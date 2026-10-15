@@ -8,6 +8,14 @@ import { Histogram } from 'prom-client';
 
 export const EXPIRY_BUFFER_LEDGERS = 10;
 
+/**
+ * #827: base funding for a fresh ephemeral account, and the additional base
+ * reserve the network charges for the trustline an issued-asset account needs.
+ * Stellar's current base reserve is 0.5 XLM per ledger entry.
+ */
+export const EPHEMERAL_ACCOUNT_BASE_BALANCE = '2';
+export const TRUSTLINE_BASE_RESERVE = '0.5';
+
 @Injectable()
 export class StellarService {
   private readonly logger = new Logger(StellarService.name);
@@ -134,6 +142,9 @@ export class StellarService {
     recoveryAddress: string;
     sweepControllerContractId: string;
     fundingKeypairSecret?: string;
+    // #827: required for a non-native (issued) asset, so the trustline can be
+    // signed by the new account.
+    ephemeralSecret?: string;
   }): Promise<{ txHash: string; contractId: string }> {
     this.logger.log(`Creating ephemeral account: ${params.publicKey}`);
 
@@ -147,20 +158,54 @@ export class StellarService {
       fundingKeypair.publicKey(),
     );
 
-    const transaction = new StellarSdk.TransactionBuilder(fundingAccount, {
-      fee: StellarSdk.BASE_FEE,
-      networkPassphrase: this.getNetworkPassphrase(),
-    })
-      .addOperation(
-        StellarSdk.Operation.createAccount({
-          destination: params.publicKey,
-          startingBalance: '2',
+    // #827: an issued asset needs a trustline on the ephemeral account before
+    // any payment of that asset can be received; the trustline also needs the
+    // account to hold an extra base reserve.
+    const issuedAsset = this.parseIssuedAsset(params.asset);
+    let ephemeralKeypair: StellarSdk.Keypair | undefined;
+    if (issuedAsset) {
+      if (!params.ephemeralSecret) {
+        throw new Error(
+          `Cannot fund issued asset ${params.asset}: the ephemeral ` +
+            "account's secret is required to establish its trustline.",
+        );
+      }
+      ephemeralKeypair = StellarSdk.Keypair.fromSecret(params.ephemeralSecret);
+    }
+
+    const transactionBuilder = new StellarSdk.TransactionBuilder(
+      fundingAccount,
+      {
+        fee: StellarSdk.BASE_FEE,
+        networkPassphrase: this.getNetworkPassphrase(),
+      },
+    ).addOperation(
+      StellarSdk.Operation.createAccount({
+        destination: params.publicKey,
+        startingBalance: issuedAsset
+          ? String(
+              Number(EPHEMERAL_ACCOUNT_BASE_BALANCE) +
+                Number(TRUSTLINE_BASE_RESERVE),
+            )
+          : EPHEMERAL_ACCOUNT_BASE_BALANCE,
+      }),
+    );
+
+    if (issuedAsset && ephemeralKeypair) {
+      transactionBuilder.addOperation(
+        StellarSdk.Operation.changeTrust({
+          asset: new StellarSdk.Asset(issuedAsset.code, issuedAsset.issuer),
+          source: params.publicKey,
         }),
-      )
-      .setTimeout(30)
-      .build();
+      );
+    }
+
+    const transaction = transactionBuilder.setTimeout(30).build();
 
     transaction.sign(fundingKeypair);
+    if (ephemeralKeypair) {
+      transaction.sign(ephemeralKeypair);
+    }
     const result = await this.server.submitTransaction(transaction);
     this.logger.log(`Horizon account created: ${result.hash}`);
 
@@ -708,5 +753,25 @@ export class StellarService {
     return this.network === 'mainnet'
       ? StellarSdk.Networks.PUBLIC
       : StellarSdk.Networks.TESTNET;
+  }
+
+  /**
+   * #827: parse a `CODE:ISSUER` asset string. Returns `null` for the native
+   * asset and throws on a malformed string so a bad asset never silently
+   * skips the trustline.
+   */
+  private parseIssuedAsset(
+    asset: string,
+  ): { code: string; issuer: string } | null {
+    if (!asset || asset === 'native' || asset === 'XLM') {
+      return null;
+    }
+
+    const parts = asset.split(':');
+    if (parts.length !== 2 || !parts[0] || !parts[1]) {
+      throw new Error(`Invalid asset format: ${asset}`);
+    }
+
+    return { code: parts[0], issuer: parts[1] };
   }
 }

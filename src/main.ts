@@ -5,8 +5,13 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import { AppModule } from './app.module.js';
 import { PinoLoggerService } from './common/logger/pino-logger.service.js';
 import appConfig from './config/app.config.js';
+import { validateEnv } from './config/env-validation.js';
 
 async function bootstrap() {
+  // #824: fail fast with one clear message listing every missing or invalid
+  // required env var, before Nest tries to build the app or open a connection.
+  validateEnv();
+
   const appCfg = appConfig();
   const isProduction = appCfg.env === 'production';
   const logger = isProduction ? new PinoLoggerService() : undefined;

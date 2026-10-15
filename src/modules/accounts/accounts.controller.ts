@@ -5,8 +5,10 @@ import {
   Body,
   Param,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import {
   ApiTags,
   ApiOperation,
@@ -21,7 +23,10 @@ import { CreateAccountDto } from './dto/create-account.dto.js';
 import { AccountResponseDto } from './dto/account-response.dto.js';
 import { AccountsListResponseDto } from './dto/accounts-list-response.dto.js';
 import { AccountStatus } from './enums/account-status.enum.js';
-import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
+import {
+  getCallerFromRequest,
+  JwtAuthGuard,
+} from '../../common/guards/jwt-auth.guard.js';
 
 @ApiTags('accounts')
 @ApiBearerAuth()
@@ -54,8 +59,12 @@ export class AccountsController {
   @ApiBody({ type: CreateAccountDto })
   public async create(
     @Body() createAccountDto: CreateAccountDto,
+    @Req() req: Request,
   ): Promise<AccountResponseDto> {
-    return this.accountsService.create(createAccountDto);
+    return this.accountsService.create(
+      createAccountDto,
+      getCallerFromRequest(req),
+    );
   }
 
   @Get(':id')
@@ -78,17 +87,21 @@ export class AccountsController {
     description:
       'Rate limit exceeded — requests are throttled to protect funding flows',
   })
-  public async findOne(@Param('id') id: string): Promise<AccountResponseDto> {
-    return this.accountsService.findOne(id);
+  public async findOne(
+    @Param('id') id: string,
+    @Req() req: Request,
+  ): Promise<AccountResponseDto> {
+    return this.accountsService.findOne(id, getCallerFromRequest(req));
   }
 
   @Get()
   @ApiOperation({
-    summary: 'List ephemeral accounts (Admin)',
+    summary: 'List ephemeral accounts',
     description:
-      'Administrative endpoint for listing all ephemeral accounts with optional filtering. ' +
-      'Supports filtering by status and offset-based pagination using limit/offset. ' +
-      'Maximum 100 records per request.',
+      'Lists ephemeral accounts with optional filtering. An admin-scoped token ' +
+      'sees every account; a sender-scoped token only sees accounts stamped with ' +
+      'its own sender address (#825). Supports filtering by status and ' +
+      'offset-based pagination using limit/offset. Maximum 100 records per request.',
   })
   @ApiQuery({
     name: 'status',
@@ -130,10 +143,14 @@ export class AccountsController {
       'Rate limit exceeded — requests are throttled to protect funding flows',
   })
   public async findAll(
+    @Req() req: Request,
     @Query('status') status?: AccountStatus,
     @Query('limit') limit = 50,
     @Query('offset') offset = 0,
   ): Promise<AccountsListResponseDto> {
-    return this.accountsService.findAll({ status, limit, offset });
+    return this.accountsService.findAll(
+      { status, limit, offset },
+      getCallerFromRequest(req),
+    );
   }
 }

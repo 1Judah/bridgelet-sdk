@@ -23,6 +23,19 @@ export class AccountResponseDto {
 
   @ApiProperty({
     description:
+      'Stellar public key of the sender who created this account, or null ' +
+      'for accounts created without a sender identity. Drives the scoping of ' +
+      'GET /accounts and GET /accounts/:id (#825).',
+    example: 'GSENDER1234EFGH5678IJKL9012MNOP3456QRST7890UVWX1234YZAB5678',
+    format: 'stellar-public-key',
+    pattern: '^[G][A-Z0-9]{55}$',
+    nullable: true,
+    readOnly: true,
+  })
+  senderAddress: string | null;
+
+  @ApiProperty({
+    description:
       'URL for claiming funds from this account. Null if account is already claimed or expired.',
     example: 'https://bridgelet.app/claim/abc123def456',
     format: 'uri',

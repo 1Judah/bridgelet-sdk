@@ -70,22 +70,7 @@ export class ValidationProvider {
     try {
       await server.loadAccount(destinationAddress);
     } catch (error: unknown) {
-      let isNotFound = false;
-      if (error instanceof NotFoundError) {
-        isNotFound = true;
-      } else if (error && typeof error === 'object') {
-        const errObj = error as {
-          name?: string;
-          status?: number;
-          response?: { status?: number };
-        };
-        isNotFound =
-          errObj.name === 'NotFoundError' ||
-          errObj.status === 404 ||
-          errObj.response?.status === 404;
-      }
-
-      if (isNotFound) {
+      if (ValidationProvider.isNotFoundError(error)) {
         throw new BadRequestException({
           statusCode: 400,
           error: 'DESTINATION_NOT_FUNDED',
@@ -98,6 +83,133 @@ export class ValidationProvider {
       // Treat network/transient errors as transient; do not report as "not funded"
       throw error;
     }
+  }
+
+  /**
+   * #827: asserts that a destination already trusts an issued asset before the
+   * asset can be swept to it. A Horizon `Payment` of an issued asset fails if
+   * the destination has no trustline, so this turns that opaque on-chain
+   * failure into a clear 400.
+   *
+   * The native asset and malformed assets are no-ops; the sweep flow rejects
+   * malformed assets earlier via `isValidAssetFormat`.
+   *
+   * @param destinationAddress The Stellar public address to check.
+   * @param asset The asset in `CODE:ISSUER` (or `native`) form.
+   * @param horizonServerOrUrl Optional Horizon.Server instance or Horizon URL string.
+   */
+  public async assertDestinationTrustsAsset(
+    destinationAddress: string,
+    asset: string,
+    horizonServerOrUrl?:
+      | { loadAccount: (id: string) => Promise<unknown> }
+      | string,
+  ): Promise<void> {
+    return ValidationProvider.assertDestinationTrustsAsset(
+      destinationAddress,
+      asset,
+      horizonServerOrUrl,
+    );
+  }
+
+  public static async assertDestinationTrustsAsset(
+    destinationAddress: string,
+    asset: string,
+    horizonServerOrUrl?:
+      | { loadAccount: (id: string) => Promise<unknown> }
+      | string,
+  ): Promise<void> {
+    if (!asset || asset === 'native' || asset === 'XLM') {
+      return;
+    }
+
+    const parts = asset.split(':');
+    if (parts.length !== 2 || !parts[0] || !parts[1]) {
+      return;
+    }
+    const [assetCode, assetIssuer] = parts;
+
+    let server: { loadAccount: (id: string) => Promise<unknown> };
+    if (
+      horizonServerOrUrl &&
+      typeof horizonServerOrUrl === 'object' &&
+      'loadAccount' in horizonServerOrUrl &&
+      typeof horizonServerOrUrl.loadAccount === 'function'
+    ) {
+      server = horizonServerOrUrl;
+    } else if (
+      typeof horizonServerOrUrl === 'string' &&
+      horizonServerOrUrl.trim() !== ''
+    ) {
+      server = new Horizon.Server(horizonServerOrUrl);
+    } else {
+      const url =
+        process.env.STELLAR_HORIZON_URL ||
+        'https://horizon-testnet.stellar.org';
+      server = new Horizon.Server(url);
+    }
+
+    let account: unknown;
+    try {
+      account = await server.loadAccount(destinationAddress);
+    } catch (error: unknown) {
+      if (ValidationProvider.isNotFoundError(error)) {
+        throw new BadRequestException({
+          statusCode: 400,
+          error: 'DESTINATION_NOT_FUNDED',
+          code: 'DESTINATION_NOT_FUNDED',
+          message:
+            'Destination address does not exist on Stellar network and is not funded',
+        });
+      }
+      throw error;
+    }
+
+    const balances =
+      (
+        account as {
+          balances?: Array<{
+            asset_code?: string;
+            asset_issuer?: string;
+          }>;
+        }
+      ).balances ?? [];
+
+    const trustsAsset = balances.some(
+      (balance) =>
+        balance.asset_code === assetCode &&
+        balance.asset_issuer === assetIssuer,
+    );
+
+    if (!trustsAsset) {
+      throw new BadRequestException({
+        statusCode: 400,
+        error: 'DESTINATION_NO_TRUSTLINE',
+        code: 'DESTINATION_NO_TRUSTLINE',
+        message:
+          `Destination address does not trust asset ${assetCode}:${assetIssuer}; ` +
+          'it must add a trustline before this asset can be swept',
+      });
+    }
+  }
+
+  private static isNotFoundError(error: unknown): boolean {
+    if (error instanceof NotFoundError) {
+      return true;
+    }
+    if (error && typeof error === 'object') {
+      const errObj = error as {
+        name?: string;
+        status?: number;
+        response?: { status?: number };
+      };
+      return (
+        errObj.name === 'NotFoundError' ||
+        errObj.status === 404 ||
+        errObj.response?.status === 404
+      );
+    }
+    return false;
   }
 
   /**
@@ -184,6 +296,15 @@ export class ValidationProvider {
         `Asset mismatch: expected ${account.asset}, got ${sweepExecutionRequest.asset}`,
       );
     }
+
+    // #827: for an issued asset, the destination must already trust it or the
+    // payment will fail on-chain. Checked here (before executeSweep takes the
+    // #826 nonce lock) so no network round-trip happens inside the lock.
+    await this.assertDestinationTrustsAsset(
+      sweepExecutionRequest.destinationAddress,
+      sweepExecutionRequest.asset,
+      process.env.STELLAR_HORIZON_URL,
+    );
 
     this.logger.log(
       `Validation passed for account: ${sweepExecutionRequest.accountId}`,

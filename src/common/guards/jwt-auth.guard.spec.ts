@@ -2,12 +2,22 @@ import { ExecutionContext, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { JwtAuthGuard } from './jwt-auth.guard.js';
 
-const mockExecutionContext = (authHeader?: string): ExecutionContext =>
+interface MockRequest {
+  headers: { authorization?: string };
+  user?: unknown;
+}
+
+const mockRequest = (authHeader?: string): MockRequest => ({
+  headers: { authorization: authHeader },
+});
+
+const mockExecutionContext = (
+  authHeader?: string,
+  request: MockRequest = mockRequest(authHeader),
+): ExecutionContext =>
   ({
     switchToHttp: () => ({
-      getRequest: () => ({
-        headers: { authorization: authHeader },
-      }),
+      getRequest: () => request,
     }),
   }) as unknown as ExecutionContext;
 
@@ -66,6 +76,43 @@ describe('JwtAuthGuard', () => {
     );
     await expect(
       guard.canActivate(mockExecutionContext('Bearer bad.signature')),
+    ).rejects.toThrow(UnauthorizedException);
+  });
+
+  // #825: scope extraction
+  it('treats a token with no scope claim as admin', async () => {
+    jwtService.verifyAsync.mockResolvedValueOnce({ type: 'api' });
+    const request = mockRequest('Bearer valid.token');
+
+    await expect(
+      guard.canActivate(mockExecutionContext('Bearer valid.token', request)),
+    ).resolves.toBe(true);
+    expect(request.user).toEqual({ scope: 'admin', senderAddress: null });
+  });
+
+  it('attaches the sender address for a sender-scoped token', async () => {
+    const senderAddress = 'G' + 'A'.repeat(55);
+    jwtService.verifyAsync.mockResolvedValueOnce({
+      type: 'api',
+      scope: 'sender',
+      senderAddress,
+    });
+    const request = mockRequest('Bearer valid.token');
+
+    await expect(
+      guard.canActivate(mockExecutionContext('Bearer valid.token', request)),
+    ).resolves.toBe(true);
+    expect(request.user).toEqual({ scope: 'sender', senderAddress });
+  });
+
+  it('rejects a sender-scoped token with no sender address', async () => {
+    jwtService.verifyAsync.mockResolvedValueOnce({
+      type: 'api',
+      scope: 'sender',
+    });
+
+    await expect(
+      guard.canActivate(mockExecutionContext('Bearer valid.token')),
     ).rejects.toThrow(UnauthorizedException);
   });
 });

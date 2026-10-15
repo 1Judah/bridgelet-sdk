@@ -35,4 +35,11 @@
 export interface MergeAccountParams {
   ephemeralSecret: string;
   destinationAddress: string;
+  /**
+   * #827: the asset the ephemeral account holds. When it is an issued asset
+   * (`CODE:ISSUER`), `mergeAccount` removes the trustline before the
+   * `AccountMerge`, because an account with subentries (trustlines) cannot be
+   * merged. Native assets need no trustline and can omit this.
+   */
+  asset?: string;
 }

@@ -33,8 +33,8 @@ export function validateEnv(env: NodeJS.ProcessEnv = process.env): void {
     errors.push('ENCRYPTION_KEY must be a 64-character hex string');
   }
 
-  // #811: createEphemeralAccount deploys a contract instance per account from
-  // this hash, so it must be present outside tests. Skipped under
+  // #811/#824: createEphemeralAccount deploys a contract instance per account
+  // from this hash, so it must be present outside tests. Skipped under
   // NODE_ENV=test so unit tests can boot without a live network.
   if (env.NODE_ENV !== 'test') {
     const wasmHash = env.EPHEMERAL_ACCOUNT_WASM_HASH;
@@ -45,17 +45,23 @@ export function validateEnv(env: NodeJS.ProcessEnv = process.env): void {
         'EPHEMERAL_ACCOUNT_WASM_HASH must be a 64-character hex string',
       );
     }
-  }
 
-  if (
-    env.STELLAR_SWEEP_SIGNER_PROVIDER &&
-    env.STELLAR_SWEEP_SIGNER_PROVIDER !== 'env-seed' &&
-    env.STELLAR_SWEEP_SIGNER_PROVIDER !== 'kms'
-  ) {
-    errors.push('STELLAR_SWEEP_SIGNER_PROVIDER must be "env-seed" or "kms"');
-  }
+    // #824: every account is initialized with the controller ID in effect at
+    // creation time, so sweeps cannot be authorized without it. Required
+    // outside tests, where it can be stubbed.
+    if (
+      !env.SWEEP_CONTROLLER_CONTRACT_ID ||
+      env.SWEEP_CONTROLLER_CONTRACT_ID.trim() === ''
+    ) {
+      errors.push('SWEEP_CONTROLLER_CONTRACT_ID is missing');
+    }
 
-  if (env.NODE_ENV === 'production') {
+    // #824: CLAIM_BASE_URL builds the user-facing claim link, so a wrong
+    // value silently produces broken links. Require it (valid http/https, no
+    // trailing slash) everywhere except tests, rather than only in
+    // production, because a development deployment that forgot it used to
+    // fall back to the production host and hand out real-looking but wrong
+    // links.
     const claimBaseUrl = env.CLAIM_BASE_URL;
     if (!claimBaseUrl || claimBaseUrl.trim() === '') {
       errors.push('CLAIM_BASE_URL is missing');
@@ -74,7 +80,17 @@ export function validateEnv(env: NodeJS.ProcessEnv = process.env): void {
         }
       }
     }
+  }
 
+  if (
+    env.STELLAR_SWEEP_SIGNER_PROVIDER &&
+    env.STELLAR_SWEEP_SIGNER_PROVIDER !== 'env-seed' &&
+    env.STELLAR_SWEEP_SIGNER_PROVIDER !== 'kms'
+  ) {
+    errors.push('STELLAR_SWEEP_SIGNER_PROVIDER must be "env-seed" or "kms"');
+  }
+
+  if (env.NODE_ENV === 'production') {
     // #823: production may not fall back to the env-seed sweep signer —
     // SweepSigningGuard refuses it at signing time, so a production app
     // configured that way cannot sweep at all. Fail at startup instead.
@@ -97,6 +113,15 @@ export function validateEnv(env: NodeJS.ProcessEnv = process.env): void {
       errors.push(
         'STELLAR_SWEEP_KMS_KEY_ID is required when ' +
           'STELLAR_SWEEP_SIGNER_PROVIDER is "kms"',
+      );
+    }
+
+    // #824: a wildcard CORS origin is fine for local development but means
+    // any website can call the API with a visitor's credentials, so it is
+    // rejected in production (the app enables credentials, so '*' is unsafe).
+    if (env.CORS_ORIGINS !== undefined && env.CORS_ORIGINS.trim() === '*') {
+      errors.push(
+        'CORS_ORIGINS must not be "*" in production: list the allowed origins explicitly',
       );
     }
   }
