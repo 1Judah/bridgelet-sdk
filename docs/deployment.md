@@ -32,6 +32,38 @@ allowed exactly one account per deployment.
   the existing `createAccount` and `initialize` transactions. Size the funding
   account accordingly.
 
+## Sweep signer selection (issue #823)
+
+Sweep authorization signatures are produced by a `SweepSigner`
+(`src/common/crypto/sweep-signer.ts`) selected once at startup in
+`ContractProvider.onModuleInit()`. The signed message format is the same for
+every signer (the SHA256 digest pinned by the bridgelet-core conformance
+vectors); only who holds the private key differs.
+
+- `STELLAR_SWEEP_SIGNER_PROVIDER=env-seed` (default): signs with
+  `SWEEP_SIGNING_KEY_SEED`. **Development and testnet only** —
+  `SweepSigningGuard` refuses to sign with it when `NODE_ENV=production`, and
+  both `validateEnv()` and `onModuleInit()` refuse to start with it in
+  production. There is no fallback from the production signer to the seed.
+- `STELLAR_SWEEP_SIGNER_PROVIDER=kms`: signs with an asymmetric Ed25519 AWS
+  KMS key (`STELLAR_SWEEP_KMS_KEY_ID`). Create the key with
+  `KeySpec=ECC_NIST_EDWARDS25519` and `KeyUsage=SIGN_VERIFY`, and grant the
+  app `kms:Sign` and `kms:GetPublicKey` on it. The app's IAM principal also
+  needs those permissions for the claim-secret KMS key if `KMS_ENABLED=true`.
+- `STELLAR_SWEEP_AUTHORIZED_SIGNER` (optional but recommended): the G...
+  public key the SweepController was initialized with as `authorized_signer`.
+  Startup fails with a clear error when the selected signer's public key does
+  not match, because a mismatch rejects every sweep on-chain and is otherwise
+  easy to miss. Derive the value with the one-liner in `.env.example`, or
+  from the core tooling:
+  `./target/release/sweep-signer pubkey --signer-seed-hex <64-hex seed>`.
+  For a KMS key the SDK reads the public key from KMS itself, so the same
+  check needs no operator input.
+
+Follow-up (not in this change): read `authorized_signer` directly from the
+deployed SweepController's storage at startup, instead of relying on the
+configured value.
+
 ## Database connection pool (issue #516)
 
 Pool settings live in two places that must be kept in sync:

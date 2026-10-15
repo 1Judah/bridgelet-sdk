@@ -108,8 +108,9 @@ export class SweepsService {
         sweepControllerContractId,
       );
 
-      // Step 2: Generate authorization signature for the contract call
-      const authSignature = this.contractProvider.generateAuthSignature({
+      // Step 2: Generate authorization signature for the contract call.
+      // #823: async — the signer may be a remote KMS key.
+      const authSignature = await this.contractProvider.generateAuthSignature({
         ephemeralPublicKey: sweepExecutionRequest.ephemeralPublicKey,
         destinationAddress: sweepExecutionRequest.destinationAddress,
         contractId: ephemeralAccountContractId,

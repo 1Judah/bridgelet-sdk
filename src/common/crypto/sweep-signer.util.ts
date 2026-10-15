@@ -1,5 +1,5 @@
 import * as crypto from 'crypto';
-import { Address } from '@stellar/stellar-sdk';
+import { Address, Keypair } from '@stellar/stellar-sdk';
 
 /**
  * SweepSignerUtil
@@ -60,6 +60,16 @@ export class SweepSignerUtil {
       sweepControllerContractId,
     );
 
+    return SweepSignerUtil.signMessage(message, signingKeySeed);
+  }
+
+  /**
+   * Sign a pre-built message digest (the 32-byte SHA256 output of
+   * {@link buildMessage}). Split out of `sign()` so `EnvSeedSweepSigner`
+   * (#823) can sign through the `SweepSigner` interface without
+   * re-deriving destination/nonce/controller; the bytes are identical.
+   */
+  static signMessage(message: Buffer, signingKeySeed: string): Buffer {
     const seed = Buffer.from(signingKeySeed, 'hex');
     if (seed.length !== 32) {
       throw new Error(
@@ -85,6 +95,22 @@ export class SweepSignerUtil {
     // which is exactly what env.crypto().ed25519_verify() in bridgelet-core
     // consumes. `null` algorithm = Ed25519 (unlike ECDSA, no prehash step).
     return crypto.sign(null, message, privateKey);
+  }
+
+  /**
+   * The G... strkey of the public key a 32-byte Ed25519 seed derives.
+   * Used by {@link EnvSeedSweepSigner} (#823) to report the key a signer
+   * signs with, so it can be compared against the SweepController's
+   * on-chain `authorized_signer`.
+   */
+  static publicKeyFromSeed(signingKeySeed: string): string {
+    const seed = Buffer.from(signingKeySeed, 'hex');
+    if (seed.length !== 32) {
+      throw new Error(
+        `Signing key seed must be 32 bytes (64 hex chars). Got ${seed.length} bytes.`,
+      );
+    }
+    return Keypair.fromRawEd25519Seed(seed).publicKey();
   }
 
   /**
