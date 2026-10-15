@@ -101,3 +101,9 @@ the offset space is frozen.
 - [`webhook-verification.md`](./webhook-verification.md) — HMAC signing,
   rotation, and delivery records.
 - [`api-reference.md`](./api-reference.md) — the full endpoint reference.
+
+## Verification notes (#754, #755, #757)
+
+- **Triggers (#754):** `sweep.completed` and `sweep.failed` are live in `claim-redemption.provider.ts` and asserted to fire exactly once per outcome in its spec.
+- **Pagination (#755):** `GET /webhooks` accepts `limit`/`offset`, consistent with the accounts list.
+- **`expiresAt` (#757):** DB-side only; see `docs/expires-at-scope.md`.
