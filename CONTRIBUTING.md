@@ -326,3 +326,10 @@ If you notice issues outside your scope, open a separate issue instead.
 ---
 
 **Thank you for helping improve Bridgelet SDK!** 🚀
+
+## Test quality notes
+
+- **embedded-postgres typings (#734):** `test/embedded-postgres.d.ts` is hand-maintained against a beta package. Run `npm run check:embedded-postgres-types` and re-verify the file whenever `embedded-postgres` is bumped.
+- **Expired claim tokens (#735):** `test/claim-lifecycle.e2e-spec.ts` ("Expired claim token (e2e)") covers redemption and verification after `CLAIM_TOKEN_EXPIRY` has elapsed, expecting a clear 401 rather than a 500.
+- **Mutation testing (#736):** line/branch coverage alone does not prove assertions are meaningful. `npm run test:mutation` (Stryker) targets `src/common/crypto/` and `src/modules/sweeps/`; run it before changing those directories.
+- **Metrics specs (#737):** metrics-provider specs must assert on registry state (`registry.getSingleMetric(name).get()`), not only that a mock `.inc()`/`.observe()` was called, so bucket and label mistakes are caught.
