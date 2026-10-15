@@ -569,22 +569,29 @@ export class StellarService {
     }
 
     // Parse the returned ScVal - shape mirrors AccountInfo struct in bridgelet-core.
-    // SDK v17: ScVal is a variant union narrowed by `.type`, arm payload is a
-    // plain property (the v14 `.switch()`/`.map()` accessors no longer exist).
+    // ScVal is an XDR union; inspect its discriminant with switch() and read
+    // the active arm through its generated accessor.
     const returnVal = simResult.result?.retval;
     if (!returnVal)
       throw new Error(`get_info returned no value for ${contractId}`);
 
-    if (returnVal.type !== 'scvMap' || !returnVal.map) {
+    if (returnVal.switch() !== StellarSdk.xdr.ScValType.scvMap()) {
       throw new Error(
         `get_info returned unexpected ScVal type for ${contractId}`,
       );
     }
 
-    const mapEntries = returnVal.map;
+    const mapEntries = returnVal.map();
+    if (!mapEntries) {
+      throw new Error(`get_info returned an empty map for ${contractId}`);
+    }
+
     const fields = mapEntries.map((entry) => ({
-      key: entry.key.type === 'scvSymbol' ? entry.key.value : '',
-      val: entry.val,
+      key:
+        entry.key().switch() === StellarSdk.xdr.ScValType.scvSymbol()
+          ? entry.key().sym()
+          : '',
+      val: entry.val(),
     }));
 
     const get = (key: string) => fields.find((f) => f.key === key)?.val;
@@ -592,9 +599,13 @@ export class StellarService {
     // Arm-narrowed field reads: a non-matching arm yields undefined so the
     // `?? fallback` below applies, matching the previous `?.u32() ?? x` chain.
     const asU32 = (val: ReturnType<typeof get>) =>
-      val?.type === 'scvU32' ? val.u32 : undefined;
+      val?.switch() === StellarSdk.xdr.ScValType.scvU32()
+        ? val.u32()
+        : undefined;
     const asBool = (val: ReturnType<typeof get>) =>
-      val?.type === 'scvBool' ? val.b : undefined;
+      val?.switch() === StellarSdk.xdr.ScValType.scvBool()
+        ? val.b()
+        : undefined;
 
     const recoveryVal = get('recovery_address');
     if (!recoveryVal) {
@@ -656,19 +667,18 @@ export class StellarService {
       );
     }
 
-    // The contract returns u64 (Rust `u64`), which SDK v17 surfaces as a
-    // ScValU64 variant whose `.u64` payload is a real bigint.
-    if (returnVal.type !== 'scvU64') {
+    // The contract returns u64 (Rust `u64`); inspect the XDR union arm before
+    // reading its generated accessor.
+    if (returnVal.switch() !== StellarSdk.xdr.ScValType.scvU64()) {
       throw new Error(
-        `get_nonce returned unexpected ScVal type for ` +
-          `${sweepControllerContractId}: ${returnVal.type}`,
+        `get_nonce returned unexpected ScVal type for ${sweepControllerContractId}`,
       );
     }
 
     // Convert via the decimal string form: `SweepSignerUtil.buildMessage`
     // feeds the nonce to `Buffer.writeBigUInt64BE`, which throws a TypeError
     // on anything that is not a real bigint.
-    return BigInt(returnVal.u64.toString());
+    return BigInt(returnVal.u64().toString());
   }
 
   /**
