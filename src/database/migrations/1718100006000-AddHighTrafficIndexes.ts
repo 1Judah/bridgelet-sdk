@@ -3,7 +3,9 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
 /**
  * AddHighTrafficIndexes1718100006000
  *
- * Index → query map
+ * Index → query map (#878: every index below is annotated with the one query
+ * pattern it exists to serve, so a future schema change does not drop an index
+ * that is load-bearing for a query nobody remembers.)
  * ─────────────────
  * Every index in this migration exists to serve a named query, and none of
  * those queries is declared in this file. Before dropping or renaming an

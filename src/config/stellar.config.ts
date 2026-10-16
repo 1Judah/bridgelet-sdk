@@ -56,6 +56,9 @@ export default registerAs('stellar', () => ({
   allowedAssetIssuers: getAllowedAssetIssuers(),
 }));
 
+// #882: strict enum validation at config-load time. A typo such as `main-net`
+// throws here instead of silently resolving to the TESTNET passphrase while
+// still pointing at mainnet Horizon/RPC URLs.
 function getNetwork(): StellarNetwork {
   const network = process.env.STELLAR_NETWORK || 'testnet';
   if (network !== 'mainnet' && network !== 'testnet') {

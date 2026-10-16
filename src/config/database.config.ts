@@ -6,7 +6,8 @@ import { fileURLToPath } from 'url';
 import 'dotenv/config';
 
 /**
- * Connection pool rationale (issue #516)
+ * Connection pool rationale (issue #516, re-confirmed #880 — see the
+ * load-testing section of README.md for the 50-concurrent-request relationship)
  * ───────────────────────────────────────
  * • max: 10 – Caps each NestJS instance to 10 connections. This leaves room
  *             for other services sharing the same PostgreSQL server. See
