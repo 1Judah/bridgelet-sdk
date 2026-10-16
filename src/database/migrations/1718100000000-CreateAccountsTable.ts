@@ -1,5 +1,11 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
+/**
+ * #877: this migration (like every other one in this folder) ships a symmetric
+ * `down()`, and `test/migrations.integration.runner.ts` exercises
+ * `migration:revert` back to zero and re-applies, so a missing or broken
+ * `down()` fails the runner instead of staying undetected.
+ */
 export class CreateAccountsTable1718100000000 implements MigrationInterface {
   name = 'CreateAccountsTable1718100000000';
 

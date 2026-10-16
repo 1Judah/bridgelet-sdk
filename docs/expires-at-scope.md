@@ -13,6 +13,10 @@ Stellar contract call.
   ever reaching the chain.
 - Indexed via `IDX_accounts_expiresAt` / `IDX_accounts_status_expiresAt` for
   the scheduler's poll query.
+- `PaymentMonitorService.pollAllAccounts()` queries
+  `status = PENDING_PAYMENT AND expiresAt > now` (`MoreThan(now)`), so the
+  poller never asks Horizon about accounts the expiry job is about to expire
+  (#874, re-confirmed — see `1718100006000-AddHighTrafficIndexes`).
 
 ## Contract-side (uses `expiresIn`, not `expiresAt`)
 

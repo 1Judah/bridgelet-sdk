@@ -643,6 +643,8 @@ describe('StellarService', () => {
 
   // ── getAccountInfo ──────────────────────────────────────────────────────────
 
+  // #871: simulateTransaction error branches for get_info — isSimulationError,
+  // a network-level rejection and a malformed/no-retval response.
   describe('getAccountInfo', () => {
     it('throws when simulateTransaction returns an error', async () => {
       sorobanServer.simulateTransaction.mockResolvedValue({
