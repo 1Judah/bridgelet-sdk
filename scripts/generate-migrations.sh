@@ -14,7 +14,7 @@
 #      (safety check so it can never be run against the wrong directory).
 #   2. Aborts when src/database/migrations/ contains uncommitted changes
 #      (modified, staged, or untracked files) unless --force was given,
-#      because the rewrite below would permanently discard them.
+#      because the rewrite below would permanently discard them (#875).
 #   3. Removes the existing src/database/migrations/ directory.
 #   4. Recreates it and writes out each migration file verbatim.
 #
