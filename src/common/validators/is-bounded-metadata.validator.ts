@@ -26,6 +26,11 @@ function depthOf(value: unknown, depth = 0): number {
  * validation, ahead of sanitizeMetadata() in AccountsService.create(), so an
  * oversized/deeply-nested payload is rejected with a 400 before it is ever
  * buffered or walked by the sanitizer.
+ *
+ * Verified for #853: `CreateAccountDto.metadata` is decorated with
+ * `@IsBoundedMetadata()`, so the size (`METADATA_MAX_BYTES`) and depth
+ * (`METADATA_MAX_DEPTH`) bounds are enforced by class-validator before the
+ * payload reaches `sanitizeMetadata()`.
  */
 export function IsBoundedMetadata(options?: ValidationOptions) {
   return function (object: object, propertyName: string) {
