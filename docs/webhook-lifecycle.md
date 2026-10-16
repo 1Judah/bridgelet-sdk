@@ -101,3 +101,10 @@ the offset space is frozen.
 - [`webhook-verification.md`](./webhook-verification.md) — HMAC signing,
   rotation, and delivery records.
 - [`api-reference.md`](./api-reference.md) — the full endpoint reference.
+
+## Verification notes
+
+- **Delivery signing (#750):** outbound deliveries are signed with an HMAC of the payload using `webhook.secret`; integrators verify it as described in `docs/webhook-verification.md`. Attempts are recorded in the `WebhookDelivery` entity (`src/modules/webhooks/entities/webhook-delivery.entity.ts`).
+- **`PUT /webhooks/:id` (#751):** `UpdateWebhookDto` accepts `url`, `events`, `description`, `isActive` and `secret` (rotation); both new fields are validated.
+- **`DELETE /webhooks/:id` (#752):** soft delete — the row is deactivated (`isActive=false`) so delivery history is retained, consistent with `GET /webhooks` returning only active subscriptions. See `docs/api-reference.md`.
+- **CRUD integration test (#753):** `webhooks.controller.integration.spec.ts` exercises create → list → update → delete against a test repository.
