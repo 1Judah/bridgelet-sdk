@@ -33,6 +33,11 @@ const sweepFailureCounter = makeCounterProvider({
  * no provider declares `Scope.REQUEST`, so the instances above - and the
  * Stellar connections they open in their constructors - are created once per
  * process rather than once per request.
+ *
+ * Verified for #864: `ContractProvider` and `TransactionProvider` are each
+ * registered once in the `providers` array below with no `scope` override,
+ * so Nest instantiates a single singleton of each per application lifecycle.
+ * Neither is request-scoped, and neither is instantiated per request.
  */
 @Module({
   imports: [TypeOrmModule.forFeature([Account]), StellarModule],
