@@ -74,7 +74,7 @@ export class StellarService {
   /**
    * Generates the ephemeral account keypair.
    *
-   * ## Randomness source (audited, #654, #715)
+   * ## Randomness source (audited, #654, #715, re-confirmed #868)
    *
    * This returns the actual secret key for an account that will hold funds, so
    * the entropy source matters. Keypair.random() uses a CSPRNG and no intermediate

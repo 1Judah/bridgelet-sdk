@@ -467,7 +467,7 @@ describe('PaymentMonitorProvider', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Horizon paging tokens & multiple inbound payments (#717)
+  // Horizon paging tokens & multiple inbound payments (#717, re-confirmed #870)
   // -------------------------------------------------------------------------
 
   describe('multiple inbound payments with paging tokens (#717)', () => {
