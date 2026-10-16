@@ -415,6 +415,11 @@ webhook's `isActive` column to `false` and saves the row — it does not
 remove it from the `webhooks` table (see
 `WebhooksService.remove()` in `src/modules/webhooks/webhooks.service.ts`).
 
+> Verified for #843: `WebhooksController.remove()` calls
+> `WebhooksService.remove()`, which performs the `isActive = false` update
+> documented above — confirming the endpoint deactivates rather than
+> hard-deleting the row.
+
 Consequences:
 
 - The row (and its `id`) continue to exist and keep any foreign-key
