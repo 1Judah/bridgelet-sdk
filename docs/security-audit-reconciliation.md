@@ -32,3 +32,9 @@ the process below is meant to prevent.
 5. Rows whose risk is deliberately accepted (rather than unfixed) say so
    explicitly, with the reason. Without this, an accepted risk looks
    indistinguishable from an unfixed gap and gets re-filed every quarter.
+
+## Verification notes
+
+- **API reference coverage (#739):** every route in the README "Key Endpoints" table has a matching section in `docs/api-reference.md` (`POST/GET /accounts`, `GET /accounts/:id`, `POST /claims/verify`, `POST /claims/redeem`, `GET /claims/:id`, and `GET/POST/PUT/DELETE /webhooks`). Re-check both when adding a route.
+- **Webhook event catalog (#740):** the event names passed to `webhooksService.triggerEvent(...)` are `account.created` (`accounts.service.ts`), `account.expired` (scheduler), and `sweep.completed`, `sweep.failed`, `sweep.partial` (`claim-redemption.provider.ts`). All five are documented in `docs/webhook-events.md`.
+- **KMS data key persistence (#741):** `KmsKeyProvider` persists the encrypted data key (`KMS_ENCRYPTED_DATA_KEY` or `KMS_DATA_KEY_PATH`) and refuses to regenerate it when unwrapping fails; see `SECURITY.md`.
