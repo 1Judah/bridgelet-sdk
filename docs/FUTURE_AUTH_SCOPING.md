@@ -4,6 +4,11 @@
 > module-local documentation, so it lives here in `docs/` rather than inside
 > `src/modules/accounts/`. Track implementation of the design below as its
 > own issue when work on it starts.
+>
+> Verified for #849: this document already lives in `docs/` (not inside the
+> accounts module) and its status section tracks concrete implementation
+> progress (issue #825), so it is linked to a plan rather than left as
+> module-local orphan documentation.
 
 **Status:** Partially implemented (issue #825). `JwtAuthGuard` now reads two
 optional claims:
