@@ -4,8 +4,9 @@ import { Registry } from 'prom-client';
 import { AccountLatencyMetricsProvider } from './account-latency-metrics.provider.js';
 
 /**
- * Issue #676 — assert on the resulting Prometheus metric state, not just on
- * the provider's own accessors. In particular these tests pin the histogram's
+ * Issue #676, re-confirmed #890 — assert on the resulting Prometheus metric
+ * state (via `registry.getSingleMetric(...).get()`), not just on the
+ * provider's own accessors. In particular these tests pin the histogram's
  * bucket boundaries and counts, which a mock-based test could never catch.
  *
  * Each test gets a fresh `Registry` injected so assertions are independent of

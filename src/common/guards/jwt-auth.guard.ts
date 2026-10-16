@@ -63,6 +63,9 @@ export class JwtAuthGuard implements CanActivate {
         senderAddress?: string;
       }>(token);
 
+      // #884: require an explicit `type: 'api'`. A claim token is signed with
+      // `type: 'claim'`, so presenting one here is rejected rather than being
+      // reusable as a general auth bearer token.
       if (payload.type !== 'api') {
         throw new UnauthorizedException();
       }
