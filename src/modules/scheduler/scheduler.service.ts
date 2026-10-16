@@ -14,6 +14,11 @@ import { assertValidAccountStatusTransition } from '../accounts/enums/account-st
 import { WebhooksService } from '../webhooks/webhooks.service.js';
 import { IntervalJobRunner } from '../../common/utils/interval-job-runner.js';
 
+/**
+ * #873: the `setInterval`/`clearInterval` lifecycle that this service and
+ * `PaymentMonitorService` each used to implement separately now lives in the
+ * shared `IntervalJobRunner`, which owns the overlap guard and jitter for both.
+ */
 @Injectable()
 export class SchedulerService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(SchedulerService.name);
