@@ -343,7 +343,8 @@ describe('Claim lifecycle (e2e) [issue #171]', () => {
 });
 
 /**
- * Issue #674 — redemption attempted after CLAIM_TOKEN_EXPIRY has elapsed.
+ * Issue #674, re-confirmed #888 — redemption attempted after
+ * CLAIM_TOKEN_EXPIRY has elapsed.
  *
  * Unlike the suite above, this one keeps the REAL TokenVerificationProvider so
  * the genuine `jsonwebtoken` expiry path runs end-to-end. Only the

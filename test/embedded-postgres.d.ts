@@ -7,8 +7,9 @@
  * without notice — which would silently desynchronise this file from the
  * package the e2e suite actually loads.
  *
- * MAINTENANCE RULE (issue #673): whenever `embedded-postgres` is bumped in
- * package.json, re-verify this file against the new version before merging.
+ * MAINTENANCE RULE (issue #673, re-confirmed #887): whenever
+ * `embedded-postgres` is bumped in package.json, re-verify this file against
+ * the new version before merging.
  * `npm run check:embedded-postgres-types` fails the build when the pinned
  * range and the `LAST_VERIFIED_VERSION` below drift apart, so the bump cannot
  * be forgotten.
