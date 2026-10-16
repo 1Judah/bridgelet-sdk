@@ -141,3 +141,10 @@ secret keys.
 ## Reporting a vulnerability
 
 If you discover a security issue in this repository, please do not open a public GitHub issue. Contact the maintainers directly so the issue can be triaged and fixed before disclosure.
+
+## Verification notes
+
+- **Dual-key decrypt (#742):** `aes256gcm:v2:<keyId>:...` ciphertexts and the key ring in `SecretEncryptionUtil` allow decrypting under the previous key during a rotation window (`secret-rotation.util.ts`).
+- **Legacy secret formats (#743):** run `npm run audit:secrets` (`src/scripts/audit-legacy-secret-formats.ts`) to find remaining unprefixed or base64 rows. The legacy branches in `decrypt()` can be deleted once it reports none.
+- **JWT_SECRET rotation (#744):** see `docs/jwt-secret-rotation-runbook.md`; `jwt-rotation.util.ts` accepts the previous secret during the grace window.
+- **StrKey validation (#745):** `is-stellar-public-key.validator.ts` is covered by `is-stellar-public-key.validator.spec.ts` and a fuzz spec (`is-stellar-public-key.fuzz.spec.ts`) including checksum-invalid encodings.
