@@ -1,6 +1,7 @@
 import {
   IsUrl,
   IsArray,
+  IsIn,
   IsString,
   IsOptional,
   MinLength,
@@ -8,6 +9,10 @@ import {
 } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { IsSafeWebhookUrl } from '../../../common/validators/safe-webhook-url.validator.js';
+import {
+  WEBHOOK_EVENTS,
+  WEBHOOK_EVENTS_MESSAGE,
+} from '../webhook-events.js';
 
 export class CreateWebhookDto {
   @ApiProperty({ example: 'https://api.example.com/hooks' })
@@ -25,9 +30,13 @@ export class CreateWebhookDto {
       'account.expired',
     ],
     description: 'Event types to subscribe to',
+    enum: WEBHOOK_EVENTS,
   })
   @IsArray()
   @IsString({ each: true })
+  // #913 — an unknown event name is rejected here rather than silently creating
+  // a subscription that never fires.
+  @IsIn(WEBHOOK_EVENTS, { each: true, message: WEBHOOK_EVENTS_MESSAGE })
   events: string[];
 
   @ApiProperty({

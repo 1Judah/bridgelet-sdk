@@ -1,4 +1,12 @@
-import { Controller, Get, Param, Post, Body, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Param,
+  Post,
+  Body,
+  UseGuards,
+  ParseUUIDPipe,
+} from '@nestjs/common';
 import {
   ApiOperation,
   ApiResponse,
@@ -33,7 +41,13 @@ export class ClaimsController {
     type: ClaimDetailsDto,
   })
   @ApiResponse({ status: 404, description: 'Claim not found' })
-  public async findOne(@Param('id') id: string): Promise<ClaimDetailsDto> {
+  @ApiResponse({ status: 400, description: 'id is not a valid UUID' })
+  // `Claim.id` is a uuid column, so a non-UUID path segment reached Postgres as
+  // `where: { id }` and surfaced as a 500 driver error instead of a 404. Rejecting
+  // it here turns a malformed request into a 400 and documents the shape (#911).
+  public async findOne(
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ): Promise<ClaimDetailsDto> {
     return this.claimsService.findClaimById(id);
   }
 

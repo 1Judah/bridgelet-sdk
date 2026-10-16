@@ -1,6 +1,7 @@
 import {
   IsUrl,
   IsArray,
+  IsIn,
   IsString,
   IsOptional,
   IsBoolean,
@@ -8,6 +9,10 @@ import {
   Matches,
 } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
+import {
+  WEBHOOK_EVENTS,
+  WEBHOOK_EVENTS_MESSAGE,
+} from '../webhook-events.js';
 
 export class UpdateWebhookDto {
   @ApiProperty({
@@ -27,10 +32,14 @@ export class UpdateWebhookDto {
       'account.expired',
     ],
     description: 'Event types to subscribe to',
+    enum: WEBHOOK_EVENTS,
   })
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
+  // #913 — same catalogue as create, so a rotation cannot introduce an unknown
+  // event name that silently never fires.
+  @IsIn(WEBHOOK_EVENTS, { each: true, message: WEBHOOK_EVENTS_MESSAGE })
   events?: string[];
 
   @ApiProperty({
