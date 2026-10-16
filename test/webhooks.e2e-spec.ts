@@ -1,5 +1,5 @@
 /**
- * E2E test for the webhooks module lifecycle (issue #672).
+ * E2E test for the webhooks module lifecycle (issue #672, re-confirmed #886).
  *
  * Complements the unit-level `webhooks.controller.spec.ts` and the
  * repository-fake `webhooks.controller.integration.spec.ts` by exercising the
