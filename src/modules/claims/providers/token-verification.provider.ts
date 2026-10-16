@@ -60,7 +60,13 @@ export class TokenVerificationProvider {
       // Validate account status
       this.validateAccountStatus(account);
 
-      // Check if current time hasn't exceeded the account's expiry time
+      // Check if current time hasn't exceeded the account's expiry time.
+      //
+      // #839: `CLAIM_TOKEN_EXPIRY` (default 2592000s / 30 days) can be longer
+      // than the account's own `expiresAt`, so a JWT can still be
+      // cryptographically valid after the account has expired. This check is
+      // what actually rejects such a token - verification does not rely on a
+      // downstream 404 to catch an expired account.
       if (new Date() > account.expiresAt) {
         this.logger.warn(
           `Account ${account.id} has expired at ${account.expiresAt.toISOString()}`,
