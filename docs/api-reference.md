@@ -490,3 +490,10 @@ Errors use the standard Nest shape:
 on the same field. Every request is assigned an `X-Request-Id` (also echoed in
 the response body by the request-id middleware), which is the identifier to
 quote when reporting a problem.
+
+## Implementation notes
+
+- **Metadata bounds (#762):** `CreateAccountDto.metadata` is checked by `@IsObject()` and `@IsBoundedMetadata()` (size/depth limits) during DTO validation, before `sanitizeMetadata()` runs.
+- **Sweep webhooks (#763):** `ClaimRedemptionProvider` fires `sweep.completed` or `sweep.failed` exactly once per redemption outcome, never both; asserted in `claim-redemption.provider.spec.ts`.
+- **KMS data key persistence (#832):** the encrypted data key is persisted (`KMS_ENCRYPTED_DATA_KEY` / `KMS_DATA_KEY_PATH`) and not regenerated on restart; see `SECURITY.md`.
+- **Key rotation (#833):** `aes256gcm:v2:<keyId>:...` ciphertext with a previous-key decrypt path is implemented in `SecretEncryptionUtil` / `secret-rotation.util.ts`.
