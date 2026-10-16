@@ -14,11 +14,19 @@ going stale.
 | Broader secrets-at-rest audit          | #547                                  | Closed             |
 | Dependency vulnerability scanning gate | #548                                  | Closed             |
 | API key rotation/revocation            | #549                                  | Closed             |
-| Webhook secret encryption-at-rest gap  | #688                                  | Open — in progress |
+| Webhook secret encryption-at-rest gap  | #688                                  | Closed             |
 
 Every row now resolves to a real issue. The previous state of this table listed
 the webhook-secret gap as "Not yet filed", which is precisely the failure mode
 the process below is meant to prevent.
+
+> **Corrected 2026-10-16 (#891).** This row read `Open — in progress` while #688
+> was already closed. `WebhooksService.encryptSecret()` routes `create()` and
+> `update()` through `KmsKeyProvider.encrypt()`, so the column is envelope-encrypted.
+> The matching `SECURITY_AUDIT.md` row had the same drift and was corrected in the
+> same pass. Note this tripped rule 2 below — a row may not be marked `Remediated`
+> without a closed issue, and the inverse also holds: a row must not stay `Gap`
+> once its issue is closed.
 
 ## Process going forward
 

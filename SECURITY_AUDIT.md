@@ -13,15 +13,20 @@ already tracked for account secret keys.
 | Claim tokens                | `accounts` table, `claimTokenHash` only     | SHA-256 hash, plaintext never persisted                          | OK                                                              |
 | JWT signing secret          | Environment variable (`JWT_SECRET`)         | Not stored in DB; relies on deployment secret manager            | Accepted risk — deployment-level responsibility, not an app gap |
 | Database credentials        | Environment variables                       | Not stored in DB or repo; relies on deployment secret manager    | Accepted risk — deployment-level responsibility, not an app gap |
-| Webhook secrets             | `webhooks` table, `secret` column           | Stored as-is (no encryption-at-rest confirmed)                   | Gap — tracked by #688                                           |
+| Webhook secrets             | `webhooks` table, `secret` column           | Envelope-encrypted via `KmsKeyProvider` (`encryptSecret`)        | Remediated — #688                                               |
 | API keys (integrators)      | `accounts` table / future `api-keys` module | Rotation/revocation added                                        | Remediated — #549                                               |
 
 ## Gaps identified
 
-- Webhook `secret` column is not confirmed encrypted at rest, unlike account
-  secret keys. Tracked by **#688**; the `create`/`update` DTOs do enforce
-  strength and format validation (min length, character set), but the value is
-  still persisted as plaintext.
+- ~~Webhook `secret` column is not confirmed encrypted at rest, unlike account
+  secret keys.~~ **Closed.** `WebhooksService.encryptSecret()` routes both
+  `create()` and `update()` through `KmsKeyProvider.encrypt()`, so the column is
+  envelope-encrypted on the same path as account secret keys. The DTOs also
+  enforce strength and format validation (min length, character set).
+  Tracked by **#688**, now closed. This row was still showing as an open gap at
+  the 2026-09-26 review; corrected 2026-10-16 against #891.
+
+No open gaps remain in this table.
 
 ## Known dependency advisories (baselined, not silently fixed)
 
