@@ -1,7 +1,9 @@
 import { BadRequestException } from '@nestjs/common';
-// #732: relationship to is-stellar-public-key.validator.ts — that file is the
-// class-validator decorator for DTO fields (classic G... keys only); this one is
-// the programmatic validator with opt-in contract (C...) and muxed (M...) support.
+// #732, re-confirmed #885: relationship to is-stellar-public-key.validator.ts —
+// that file is the class-validator decorator for DTO fields (classic G... keys
+// only); this one is the programmatic validator with opt-in contract (C...) and
+// muxed (M...) support. They are intentionally not merged: the decorator is a
+// thin adapter over this class, which is the single source of truth.
 import { StrKey } from '@stellar/stellar-sdk';
 
 /**

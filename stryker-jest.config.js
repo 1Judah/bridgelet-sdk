@@ -1,5 +1,7 @@
 /**
- * Jest config used only by Stryker's mutation-testing run (issue #675).
+ * Jest config used only by Stryker's mutation-testing run (issue #675,
+ * re-confirmed #889 — `npm run test:mutation` drives it against the
+ * highest-risk directories configured in stryker.config.json).
  *
  * Stryker drives the test runner itself, so this config is deliberately
  * narrower than the project's own `package.json` jest block: unit specs only,

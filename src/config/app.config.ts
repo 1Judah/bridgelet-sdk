@@ -1,5 +1,11 @@
 import { registerAs } from '@nestjs/config';
 
+/**
+ * #883: the single typed place for `app.*` env reads. `scheduler`,
+ * `payment-monitor` and `main.ts` read their intervals/port from here via
+ * `ConfigService` rather than touching `process.env` directly, so
+ * `config.spec.ts` stays the source of truth for the app's environment surface.
+ */
 export default registerAs('app', () => ({
   port: parseInt(process.env.PORT ?? '3000', 10),
   env: process.env.NODE_ENV ?? 'development',
