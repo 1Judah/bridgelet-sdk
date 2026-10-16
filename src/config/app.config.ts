@@ -10,6 +10,13 @@ export default registerAs('app', () => ({
   port: parseInt(process.env.PORT ?? '3000', 10),
   env: process.env.NODE_ENV ?? 'development',
   jwtSecret: process.env.JWT_SECRET ?? 'change-me-in-production',
+  // Previous JWT secret, kept verifiable for the duration of a rotation so
+  // claim tokens signed before the swap stay redeemable. Claim tokens are valid
+  // for up to `claimTokenExpiry` (30 days by default), so an operator who
+  // changes JWT_SECRET today would otherwise invalidate every unclaimed token in
+  // flight. Unset once no outstanding token predates the rotation. Mirrors
+  // `encryptionKeyPrevious` for the AES-256 data key (issue #621/#681).
+  jwtSecretPrevious: process.env.JWT_SECRET_PREVIOUS,
   corsOrigins: process.env.CORS_ORIGINS?.split(',') || '*',
   apiRateLimit: parseInt(process.env.API_RATE_LIMIT ?? '100', 10),
   claimTokenExpiry: parseInt(process.env.CLAIM_TOKEN_EXPIRY ?? '2592000', 10),
