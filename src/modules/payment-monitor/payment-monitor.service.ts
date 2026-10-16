@@ -103,7 +103,8 @@ export class PaymentMonitorService implements OnModuleInit, OnModuleDestroy {
    * poller keeps asking Horizon about accounts whose payment window has closed,
    * i.e. exactly the rows `SchedulerService.runExpiryJob()` is about to move to
    * EXPIRED (#721). Per-account failures are isolated — one bad account does
-   * not stop the tick.
+   * not stop the tick (#872: the "failure isolation" suite in
+   * payment-monitor.service.spec.ts asserts this for a mixed batch).
    */
   async pollAllAccounts(): Promise<void> {
     const now = new Date();

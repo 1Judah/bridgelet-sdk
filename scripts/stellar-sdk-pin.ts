@@ -1,6 +1,10 @@
 /**
  * Pure evaluation of the `@stellar/stellar-sdk` exact-pin rule (issue #446).
  *
+ * #869: reconciles what the README promises with what `package.json` declares —
+ * the SDK stays an exact version (currently `17.2.1`), never a caret/tilde
+ * range, and the README quotes the same pinned version.
+ *
  * This module deliberately contains no I/O and no side effects so that the
  * whole rule can be unit-tested; `check-stellar-sdk-pin.ts` is the thin CLI
  * wrapper that feeds it the repository's `package.json`.
