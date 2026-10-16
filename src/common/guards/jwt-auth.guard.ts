@@ -5,6 +5,7 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
 import { Request } from 'express';
 
 /**
@@ -29,6 +30,13 @@ export const ADMIN_CALLER: AuthenticatedCaller = {
 
 type RequestWithCaller = Request & { user?: AuthenticatedCaller };
 
+/** Claims carried by an API bearer token (#825). */
+interface TokenPayload {
+  type?: string;
+  scope?: string;
+  senderAddress?: string;
+}
+
 /**
  * Reads the caller the guard attached to the request. Falls back to the admin
  * scope so handlers invoked directly (unit tests, or a request that somehow
@@ -40,7 +48,10 @@ export function getCallerFromRequest(request: Request): AuthenticatedCaller {
 
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
-  constructor(private readonly jwtService: JwtService) {}
+  constructor(
+    private readonly jwtService: JwtService,
+    private readonly configService?: ConfigService,
+  ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<RequestWithCaller>();
@@ -57,11 +68,7 @@ export class JwtAuthGuard implements CanActivate {
       // `senderAddress` it is scoped to. Any other token (including one with
       // no `scope` claim at all) is treated as an unscoped admin token, which
       // preserves the behaviour existing callers rely on.
-      const payload = await this.jwtService.verifyAsync<{
-        type?: string;
-        scope?: string;
-        senderAddress?: string;
-      }>(token);
+      const payload = await this.verifyToken(token);
 
       if (payload.type !== 'api') {
         throw new UnauthorizedException();
@@ -90,5 +97,37 @@ export class JwtAuthGuard implements CanActivate {
   private extractBearerToken(request: Request): string | undefined {
     const [type, token] = request.headers.authorization?.split(' ') ?? [];
     return type === 'Bearer' ? token : undefined;
+  }
+
+  /**
+   * Verifies a bearer token against the current JWT secret, then against
+   * `JWT_SECRET_PREVIOUS` if one is configured.
+   *
+   * Claim tokens are bearer secrets that stay redeemable for up to
+   * `claimTokenExpiry` (30 days by default), so rotating `JWT_SECRET` without a
+   * transition window silently invalidated every outstanding, unclaimed token.
+   * This mirrors the `encryptionKeyPrevious` grace path already used for the
+   * AES-256 data key.
+   *
+   * The previous secret is only ever used to *verify*. It is never used to sign,
+   * so a token minted during the window is always verifiable for its full
+   * lifetime regardless of when the secret is finally cleared.
+   */
+  private async verifyToken(token: string): Promise<TokenPayload> {
+    try {
+      return await this.jwtService.verifyAsync<TokenPayload>(token);
+    } catch (primaryError) {
+      const previous = this.configService?.get<string>('app.jwtSecretPrevious');
+      if (!previous) throw primaryError;
+
+      try {
+        return await this.jwtService.verifyAsync<TokenPayload>(token, {
+          secret: previous,
+        });
+      } catch {
+        // Neither the current nor the previous secret accepted it.
+        throw primaryError;
+      }
+    }
   }
 }
