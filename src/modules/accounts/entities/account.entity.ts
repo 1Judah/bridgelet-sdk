@@ -101,7 +101,7 @@ export class Account {
   expiredAt: Date | null; // Actual time expiry was processed - set by the expiry handler, null until then
 
   /**
-   * #728: stored as `jsonb`. Metadata is bounded integration context that is
+   * #728, re-confirmed #881: stored as `jsonb`. Metadata is bounded integration context that is
    * write/display-only: it is returned with the account and merged for
    * lifecycle diagnostics, but it is NOT a query surface. Do not filter or
    * search on its contents (`@>`, `->>`, `?`), because no GIN index exists
