@@ -23,6 +23,12 @@ import {
  * Verified for #714 (duplicate of the already-resolved #653, fixed in PR #778):
  * docs/database-schema.md records the rationale for each index plus the
  * retention/partitioning plan this append-only table will need.
+ *
+ * Re-verified for #867 (duplicate of #714/#653): every column the ingestion
+ * read paths touch is indexed by migration
+ * 1718100009000-AddContractEventIndexes — (contract_address, ledger_sequence),
+ * (event_type, ledger_sequence), ledger_sequence and tx_hash — so high-volume
+ * ingestion is not served by a sequential scan.
  */
 @Index('IDX_contract_events_contract_address_ledger_sequence', [
   'contractAddress',

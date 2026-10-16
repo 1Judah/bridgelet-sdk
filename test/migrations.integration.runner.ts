@@ -42,6 +42,11 @@ const postgresDatabase = 'bridgelet_test';
 // check below reflects real execution order, not just "a" valid order.
 // None of the three depends on the others (no FK or column overlap), so
 // this ordering choice doesn't change correctness — it's for fidelity.
+//
+// #876: the migration set is applied in this pinned order and re-applied in
+// the same order after a full revert (see pinnedMigrationOrder below), so the
+// shared-timestamp files are exercised deterministically rather than in
+// whatever order the filesystem happens to return.
 const migrations = [
   CreateAccountsTable1718100000000,
   CreateClaimsTable1718100001000,

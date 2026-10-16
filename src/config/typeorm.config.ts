@@ -41,7 +41,9 @@ export default new DataSource({
   entities: [__dirname + '/../**/*.entity{.ts,.js}'],
   migrations: [__dirname + '/../database/migrations/*{.ts,.js}'],
   migrationsTransactionMode: 'each',
-  // #726: the CLI DataSource is migration-driven; schema sync is hard-disabled.
+  // #726, re-confirmed for #879: the CLI DataSource is migration-driven, so
+  // schema sync is hard-disabled here and `synchronize` can never auto-alter a
+  // production schema from the entities.
   synchronize: false,
   poolSize: 10,
   extra: {
