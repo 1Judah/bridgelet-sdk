@@ -307,3 +307,26 @@ flag and never removes the `accounts` row, so soft-deleting an account never
 triggers this FK and existing claims remain intact and queryable. `CASCADE`
 only fires on an actual (hard) `DELETE` of an `accounts` row, at which point
 its claim records are removed with it rather than being orphaned.
+
+### Account status state diagram (#761)
+
+```mermaid
+stateDiagram-v2
+    [*] --> INITIALIZING
+    INITIALIZING --> PENDING_PAYMENT: creation succeeded
+    INITIALIZING --> FAILED: creation threw / initializing timeout
+    PENDING_PAYMENT --> PENDING_CLAIM: payment detected
+    PENDING_PAYMENT --> FAILED: TooManyPayments / InvalidAmount
+    PENDING_PAYMENT --> EXPIRED: expiresAt passed
+    PENDING_CLAIM --> CLAIMING: redemption started
+    PENDING_CLAIM --> EXPIRED: expiresAt passed
+    CLAIMING --> CLAIMED: sweep completed
+    CLAIMING --> PARTIAL_SWEEP: sweep partially completed
+    CLAIMING --> PENDING_CLAIM: sweep error, rollback
+    PARTIAL_SWEEP --> CLAIMING: retry
+    CLAIMED --> [*]
+    EXPIRED --> [*]
+    FAILED --> [*]
+```
+
+`CLAIMED`, `EXPIRED` and `FAILED` are terminal.
